@@ -72,6 +72,7 @@ type app struct {
 	pairAddrBox ui.Handle
 	pairCodeBox ui.Handle
 	probe       []codieout.ProbeResult
+	mediaProbe  []codieout.MediaSessionProbe
 	probing     bool
 	deviceNote  string
 }

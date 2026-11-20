@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -179,6 +180,33 @@ func (a *app) pairedView(c *ui.Context) {
 			}
 		})
 		ui.Text(c, "探测会问设备每一个可能的媒体端点——它自己报上来的能力（media/capabilities）就是这台固件能不能放视频的答案。").FontSize(12.5).TextColor(colors.faint).LineHeight(1.5)
+		if len(a.mediaProbe) > 0 {
+			ui.Row(c).Margin(8, 0, 0, 0).Children(func() {
+				ui.Text(c, "实测:媒体会话").FontSize(15).FontWeight(700)
+			})
+			ui.Column(c).Gap(6).Children(func() {
+				for i := range a.mediaProbe {
+					r := &a.mediaProbe[i]
+					row := ui.Column(c.Key("ms"+strconv.Itoa(i))).Gap(2).Padding(10, 12).Radius(9).Background(colors.press)
+					row.Children(func() {
+						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+							mark := ui.Text(c.Key("mark"), strconv.Itoa(r.Status)).FontSize(12.5).FontWeight(700)
+							if r.OK() {
+								mark.TextColor(ui.Oklch(0.75, 0.17, 145))
+							} else if r.Status == 0 {
+								mark.TextColor(colors.faint)
+							} else {
+								mark.TextColor(ui.Oklch(0.7, 0.19, 25))
+							}
+							ui.Text(c, r.Name).FontSize(13).FontWeight(600)
+						})
+						if r.Note != "" {
+							ui.Text(c, r.Note).FontSize(11.5).TextColor(colors.muted).MaxLines(8).LineHeight(1.4)
+						}
+					})
+				}
+			})
+		}
 		if len(a.probe) > 0 {
 			ui.Column(c).Gap(6).Margin(4, 0, 0, 0).Children(func() {
 				for i := range a.probe {
@@ -270,6 +298,7 @@ func (a *app) deviceProbe() {
 	client := a.codie
 	go func() {
 		results := client.ProbeMedia()
+		sessions := client.TryMediaSessions()
 		note := ""
 		if st, err := client.Status(); err == nil {
 			note = "地址 " + client.Creds.Addr
@@ -287,6 +316,7 @@ func (a *app) deviceProbe() {
 		a.post(func() {
 			a.probing = false
 			a.probe = results
+			a.mediaProbe = sessions
 			a.deviceNote = note
 		})
 	}()
