@@ -1,0 +1,8 @@
+# Go
+*.test
+build/
+codie-video-player
+data/
+
+# macOS
+.DS_Store
