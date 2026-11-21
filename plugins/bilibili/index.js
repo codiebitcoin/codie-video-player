@@ -1507,10 +1507,15 @@ export async function videoPlay({ id, episode }) {
   }
   const dash = d.dash;
   if (!dash) throw fail("unavailable", t("Bilibili has no video for this video"));
-  const best = (list) =>
-    (list || [])
+  const best = (list) => {
+    const ok = (list || [])
       .filter((x) => (x.baseUrl || x.base_url) && !/^dv/i.test(x.codecs || ""))
-      .sort((a, b) => b.bandwidth - a.bandwidth)[0];
+      .sort((a, b) => b.bandwidth - a.bandwidth);
+    // 设备的屏幕小:720p 够了就不挑更高的,下载快、传得动。
+    const mid = ok.filter((x) => (x.height || 1080) <= 720);
+    return pick(mid.length ? mid : ok);
+  };
+  const pick = (pool) => pool.sort((a, b) => b.bandwidth - a.bandwidth)[0];
   // As audioOf keeps its mirrors: one address to a host, the upos ones first,
   // for the peer-to-peer caches among the mirrors often stall.
   const mirrors = (a) => {

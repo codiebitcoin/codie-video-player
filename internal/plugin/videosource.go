@@ -3,6 +3,7 @@ package plugin
 import (
 	"net/url"
 	"strings"
+	"time"
 
 	"codie-video-player/internal/video"
 )
@@ -69,7 +70,8 @@ func (v *VideoSource) Video(id string) (*video.Video, error) {
 
 func (v *VideoSource) Play(id, ep string) (*video.Stream, error) {
 	var s video.Stream
-	if err := v.p.call("videoPlay", map[string]string{"id": id, "episode": ep}, &s); err != nil {
+	// 取流常要走 CDN 的镜像探测,30 秒的通用上限不够它用。
+	if err := v.p.callWithin(90*time.Second, "videoPlay", map[string]string{"id": id, "episode": ep}, &s); err != nil {
 		return nil, err
 	}
 	// The plugin's requestHeaders for video go with it, under what the

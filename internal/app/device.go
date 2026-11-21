@@ -303,12 +303,9 @@ func (a *app) deviceProbe() {
 		if st, err := client.Status(); err == nil {
 			note = "地址 " + client.Creds.Addr
 			if st.CardLoaded {
-				note += " · TF 卡就绪（" + st.CardRoot + "）"
+				note += " · TF 卡就绪"
 			} else {
-				note += " · TF 卡未挂载"
-			}
-			if client.Creds.Name != "" {
-				note = client.Creds.Name + " · " + note
+				note += " · TF 卡未挂载（视频播放不需要 TF 卡）"
 			}
 		} else {
 			note = "设备状态问不动：" + err.Error()

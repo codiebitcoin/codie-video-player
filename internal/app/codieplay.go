@@ -112,7 +112,7 @@ func (a *app) codieMakeMP4(s *video.Stream) (string, error) {
 	} else {
 		args = append(args, "-map", "0:v:0?", "-map", "0:a:0?")
 	}
-	if probePlayableAsIs(s) {
+	if probePlayableAsIs(s, s.Headers) {
 		log.Printf("codie play: streams already in device shape; copying")
 		args = append(args, "-c", "copy")
 	} else {
@@ -177,12 +177,15 @@ readLoop:
 				}
 			}
 			if rerr != nil {
-				<-done
-				os.Remove(dst)
-				if ctx.Err() != nil {
-					return "", errors.New("这一集转码超时了,请重试")
+				// 输出读完了:ffmpeg 已退出,成败看它的退出码。
+				if werr := <-done; werr != nil {
+					os.Remove(dst)
+					if ctx.Err() != nil {
+						return "", errors.New("这一集转码超时了,请重试")
+					}
+					return "", fmt.Errorf("%s", tailLine(reader))
 				}
-				return "", fmt.Errorf("%s", tailLine(reader))
+				break readLoop
 			}
 		}
 	}
@@ -200,34 +203,54 @@ func percentOf(us int64) int {
 }
 
 // probePlayableAsIs asks ffprobe whether the stream already plays as the
-// device takes it: H.264 with AAC, no bigger than 1080p.
-func probePlayableAsIs(s *video.Stream) bool {
+// device takes it: H.264 with AAC, no bigger than 1080p. The stream's own
+// headers go with every ask, for the CDN turns down strangers.
+func probePlayableAsIs(s *video.Stream, headers map[string]string) bool {
 	ffprobe := findFFprobe()
 	if ffprobe == "" {
 		return false // 不知道,就当要转
 	}
-	for _, url := range []string{s.URL, s.AudioURL} {
-		if url == "" {
-			continue
-		}
-		out, err := exec.Command(ffprobe, "-v", "error",
-			"-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height",
-			"-of", "json", url).Output()
+	videoArgs := []string{"-v", "error"}
+	if hdr := ffmpegHeaders(headers); hdr != "" {
+		videoArgs = append(videoArgs, "-headers", hdr)
+	}
+	// 画面:要 H.264,不大于 1080p。
+	vargs := append(videoArgs, "-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height", "-of", "json")
+	out, err := exec.Command(ffprobe, append(vargs, s.URL)...).Output()
+	if err != nil {
+		log.Printf("codie probe-as-is: ffprobe failed: %v, out: %s", err, string(out))
+		return false
+	}
+	var v struct {
+		Streams []struct {
+			CodecName string `json:"codec_name"`
+			Width     int    `json:"width"`
+			Height    int    `json:"height"`
+		} `json:"streams"`
+	}
+	if json.Unmarshal(out, &v) != nil || len(v.Streams) == 0 {
+		return false
+	}
+	st := v.Streams[0]
+	log.Printf("codie probe-as-is: video codec=%s %dx%d", st.CodecName, st.Width, st.Height)
+	if st.CodecName != "h264" || st.Width > 1920 || st.Height > 1080 {
+		return false
+	}
+	// 声音:要 AAC。画面和声音分开的源才有这一问。
+	if s.AudioURL != "" {
+		aargs := append(videoArgs, "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "json")
+		aout, err := exec.Command(ffprobe, append(aargs, s.AudioURL)...).Output()
 		if err != nil {
+			log.Printf("codie probe-as-is: audio ffprobe failed: %v", err)
 			return false
 		}
-		var v struct {
+		var a struct {
 			Streams []struct {
 				CodecName string `json:"codec_name"`
-				Width     int    `json:"width"`
-				Height    int    `json:"height"`
 			} `json:"streams"`
 		}
-		if json.Unmarshal(out, &v) != nil || len(v.Streams) == 0 {
-			return false
-		}
-		st := v.Streams[0]
-		if st.CodecName != "h264" || st.Width > 1920 || st.Height > 1080 {
+		if json.Unmarshal(aout, &a) != nil || len(a.Streams) == 0 || a.Streams[0].CodecName != "aac" {
+			log.Printf("codie probe-as-is: audio isn't aac")
 			return false
 		}
 	}
