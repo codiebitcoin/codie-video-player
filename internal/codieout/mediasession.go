@@ -148,6 +148,18 @@ func mediaSessionID(raw []byte) (string, error) {
 	}
 	if env.Data.SessionID == "" {
 		msg := firstNonEmpty(env.Message, env.Code, trunc(raw, 200))
+		// The screen side can refuse a visual session; its own reason field
+		// names what holds it, such as screen_off or main_ui_visible.
+		var reason struct {
+			Reason string `json:"reason"`
+		}
+		json.Unmarshal(raw, &reason)
+		if reason.Reason != "" {
+			msg += "（原因: " + reason.Reason + "）"
+		}
+		if env.Code == "MEDIA_SESSION_BLOCKED" {
+			msg += "——把设备屏幕点亮、解锁、退到空闲画面再试"
+		}
 		return "", errors.New(msg)
 	}
 	return env.Data.SessionID, nil
@@ -167,15 +179,12 @@ func mediaSessionState(raw []byte) (*MediaSessionState, error) {
 			SessionID  string `json:"session_id"`
 			RequestID  string `json:"request_id"`
 			Kind       string `json:"kind"`
+			State      string `json:"state"`
 			PositionMS *int64 `json:"position_ms"`
 			DurationMS *int64 `json:"duration_ms"`
+			MediaDurMS *int64 `json:"media_duration_ms"`
 			IsPlaying  *bool  `json:"is_playing"`
 			Buffering  *bool  `json:"buffering"`
-			State      struct {
-				PositionMS int64 `json:"position_ms"`
-				DurationMS int64 `json:"duration_ms"`
-				IsPlaying  bool  `json:"is_playing"`
-			} `json:"state"`
 		}
 		if json.Unmarshal(b, &d) != nil || d.SessionID == "" {
 			return nil
@@ -187,20 +196,34 @@ func mediaSessionState(raw []byte) (*MediaSessionState, error) {
 		if d.DurationMS != nil {
 			st.DurationMS = *d.DurationMS
 		}
+		if st.DurationMS == 0 && d.MediaDurMS != nil {
+			st.DurationMS = *d.MediaDurMS
+		}
 		if d.IsPlaying != nil {
 			st.IsPlaying = *d.IsPlaying
 		}
 		if d.Buffering != nil {
 			st.Buffering = *d.Buffering
 		}
-		// Some firmwares fold the facts under a state of their own.
-		if d.PositionMS == nil && d.State.DurationMS != 0 {
-			st.PositionMS, st.DurationMS, st.IsPlaying = d.State.PositionMS, d.State.DurationMS, d.State.IsPlaying
+		// A session still preparing says a state word and nothing else.
+		if st.DurationMS == 0 && d.State != "" {
+			st.IsPlaying = d.State == "playing"
 		}
 		return st
 	}
 	if st := one(env.Data); st != nil {
 		return st, nil
+	}
+	// The list answer wraps its sessions under data.sessions.
+	var canvas struct {
+		Sessions []json.RawMessage `json:"sessions"`
+	}
+	if err := json.Unmarshal(env.Data, &canvas); err == nil && len(canvas.Sessions) > 0 {
+		for _, b := range canvas.Sessions {
+			if st := one(b); st != nil {
+				return st, nil
+			}
+		}
 	}
 	var list []json.RawMessage
 	if err := json.Unmarshal(env.Data, &list); err == nil {

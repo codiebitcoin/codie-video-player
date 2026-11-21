@@ -33,22 +33,30 @@ func (c *Client) TryMediaSessions() []MediaSessionProbe {
 		'm', 'p', '4', '2', 'i', 's', 'o', 'm', 0x00, 0x00, 0x00, 0x08, 'f', 'r', 'e', 'e',
 	}
 	tries := []struct {
-		name string
-		file string
-		data []byte
+		name    string
+		file    string
+		data    []byte
+		request map[string]any
 	}{
-		{"WAV 0.5s（文档说收的）", "probe.wav", silence},
-		{"MP4 stub（视频，文档说没收的）", "probe.mp4", mp4},
+		{"WAV 0.5s（音频，无 layout）", "probe.wav", silence, map[string]any{"request_id": newRequestID(), "max_duration_ms": 2000}},
+		{"MP4 stub（视频，带全屏 layout）", "probe.mp4", mp4, map[string]any{
+			"request_id": newRequestID(),
+			"layout":     map[string]any{"x_percent": 0.0, "y_percent": 0.0, "width_percent": 100.0, "height_percent": 100.0, "fit": "contain"},
+			"playback":   map[string]any{"volume": 1.0},
+		}},
 	}
 	var out []MediaSessionProbe
 	for _, t := range tries {
 		r := MediaSessionProbe{Name: t.name}
-		status, body, err := c.postMultipart(path, t.file, t.data, map[string]any{"max_duration_ms": 2000})
+		status, body, err := c.postMultipart(path, t.file, t.data, t.request)
 		if err != nil {
 			var apiErr *APIError
 			if errors.As(err, &apiErr) {
 				r.Status = apiErr.Status
 				r.Note = firstNonEmpty(apiErr.Code, apiErr.Message, err.Error())
+				if apiErr.Code == "MEDIA_SESSION_BLOCKED" {
+					r.Note += "\n设备的屏幕此刻不接受画面:点亮屏幕、解锁、退出主界面后再试。具体原因见 reason 字段。"
+				}
 			} else {
 				r.Note = err.Error()
 			}

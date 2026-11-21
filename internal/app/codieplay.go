@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"time"
 
+	"log"
+
 	"codie-video-player/internal/codieout"
 	"codie-video-player/internal/video"
 )
@@ -128,7 +130,9 @@ func (a *app) codiePoll(sessionID string) {
 				return
 			}
 			st, err := a.codie.MediaSessionState(sessionID)
-			if err == nil {
+			if err != nil {
+				log.Printf("codie poll: %v", err)
+			} else {
 				a.post(func() {
 					if a.codieSession == sessionID {
 						a.codieState = st
