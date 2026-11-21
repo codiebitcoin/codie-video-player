@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+
+	"codie-video-player/internal/i18n"
 )
 
 // shotHook, when set, drives the app to check its design.
@@ -44,7 +46,10 @@ func init() {
 			time.Sleep(4 * time.Second)
 			shot(a.win, "1-home-hello")
 			step(1, func() {
+				// The walk reads in English, whatever the machine speaks.
 				a.settings.WizardDone = true
+				a.settings.Language = i18n.English
+				a.setLanguage()
 				a.loadTab()
 			})
 			time.Sleep(4 * time.Second)
@@ -106,6 +111,21 @@ func init() {
 			shot(a.pipWin, "8-pip")
 			step(1, func() {
 				a.closePip()
+			})
+			time.Sleep(1 * time.Second)
+			step(0, func() {
+				// The daylight palette, over the same home.
+				a.settings.Appearance = AppearanceLight
+				a.applyPalette()
+				a.page = pageList
+				a.rethemeWindows()
+			})
+			time.Sleep(3 * time.Second)
+			shot(a.win, "9-light-home")
+			step(1, func() {
+				a.settings.Appearance = AppearanceSystem
+				a.applyPalette()
+				a.rethemeWindows()
 			})
 			time.Sleep(1500 * time.Millisecond)
 			mygo.RunOnMain(mygo.App.Quit)

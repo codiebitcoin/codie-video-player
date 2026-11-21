@@ -1554,8 +1554,9 @@ export async function videoPlay({ id, episode }) {
 // Bilibili's own feeds, a page of twenty to each.
 export async function videoTabs() {
   return [
-    { id: "hot", label: "热门" },
-    { id: "new", label: "最新" },
+    { id: "hot", label: t("Popular") },
+    { id: "rank", label: t("Ranking") },
+    { id: "new", label: t("Latest") },
   ];
 }
 
@@ -1571,6 +1572,11 @@ export async function videoList({ tab, page }) {
   if (tab === "hot") {
     const d = await get("/x/web-interface/popular", { ps: 20, pn: n });
     return { items: (d.list || []).map(of), more: n < 30 };
+  }
+  if (tab === "rank") {
+    // The site's ranking is one page, however far you ask.
+    const d = await get("/x/web-interface/ranking/v2", { rid: 0, type: "all" });
+    return { items: (d.list || []).filter((v) => v.bvid).map(of), more: false };
   }
   if (tab === "new") {
     const d = await get("/x/web-interface/dynamic/region", { rid: 0, ps: 20, pn: n });

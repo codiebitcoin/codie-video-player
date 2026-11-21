@@ -5,6 +5,8 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+
+	"codie-video-player/internal/i18n"
 )
 
 // The little window: the episode in a small pane that floats over everything
@@ -38,7 +40,7 @@ func (a *app) openPip() {
 		py = y + 24
 	}
 	a.pipWin = mygo.NewWindow(mygo.WindowOptions{
-		Title:           "Codie 视频 — 小窗",
+		Title:           i18n.T("Codie Video — Mini"),
 		Width:           pipWidth,
 		Height:          pipHeight(),
 		X:               px,
@@ -74,8 +76,9 @@ func (a *app) closePip() {
 // pipContent is what the little window shows: the picture, its name, and
 // the least of the controls.
 func (a *app) pipContent(c *ui.Context) {
+	a.applyPalette()
 	t := *c.Theme()
-	t.Dark = true
+	t.Dark = colors.Dark
 	t.Accent, t.AccentHover, t.AccentPressed = colors.accent, colors.accent, colors.accent
 	c.SetTheme(&t)
 	c.Root().Background(ui.RGB(0, 0, 0))
@@ -93,14 +96,14 @@ func (a *app) pipContent(c *ui.Context) {
 			if p := a.player; p != nil && p.Playing() {
 				icon = iconPause
 			}
-			if b := iconButton(c.Key("pip-play"), icon, 15, colors.text, "播放/暂停"); b.Clicked() {
+			if b := iconButton(c.Key("pip-play"), icon, 15, colors.text, i18n.T("Play/Pause")); b.Clicked() {
 				a.playPause()
 			}
 			ui.Text(c, a.playing.item.Title).FontSize(12.5).Grow(1).Shrink(1).MinWidth(0).SingleLine().TextColor(colors.muted)
-			if b := iconButton(c.Key("pip-main"), iconRestore, 15, colors.muted, "回到主窗口"); b.Clicked() {
+			if b := iconButton(c.Key("pip-main"), iconRestore, 15, colors.muted, i18n.T("Back to Main Window")); b.Clicked() {
 				a.closePip()
 			}
-			if b := iconButton(c.Key("pip-close"), iconX, 14, colors.muted, "关闭小窗"); b.Clicked() {
+			if b := iconButton(c.Key("pip-close"), iconX, 14, colors.muted, i18n.T("Close Mini Window")); b.Clicked() {
 				a.closePip()
 			}
 		})

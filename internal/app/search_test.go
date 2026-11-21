@@ -27,10 +27,10 @@ func TestSearchProblems(t *testing.T) {
 	// nothing.
 	a := &app{}
 	a.searchGroups = []searchGroup{
-		{id: "a", name: "甲", err: "搜索失败: no such page"},
+		{id: "a", name: "甲", err: "Search failed: no such page"},
 		{id: "b", name: "乙", items: []video.Item{{ID: "1"}}},
 	}
-	if got := a.searchProblems(); got != "甲：搜索失败: no such page" {
+	if got := a.searchProblems(); got != "甲: Search failed: no such page" {
 		t.Errorf("searchProblems = %q", got)
 	}
 	a.searchGroups[0].err = ""

@@ -14,6 +14,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	mygovideo "github.com/egoist/mygo/ui/video"
 
+	"codie-video-player/internal/i18n"
 	"codie-video-player/internal/video"
 )
 
@@ -44,7 +45,7 @@ var openEpisodeStream = func(s *video.Stream) (*ui.VideoPlayer, string, error) {
 func throughFFmpeg(s *video.Stream) (*ui.VideoPlayer, string, error) {
 	ffmpeg := findFFmpeg()
 	if ffmpeg == "" {
-		return nil, "", errors.New("这一集要装了 ffmpeg 才能播:先用系统的包管理器装上,再放一次")
+		return nil, "", errors.New(i18n.T("This episode needs ffmpeg to play; install it with your package manager and try again"))
 	}
 	f, err := os.CreateTemp("", "codie-video-*.mp4")
 	if err != nil {
@@ -59,7 +60,7 @@ func throughFFmpeg(s *video.Stream) (*ui.VideoPlayer, string, error) {
 	if err != nil {
 		os.Remove(dst)
 		if ctx.Err() != nil {
-			return nil, "", errors.New("这一集打开超时了,请重试")
+			return nil, "", errors.New(i18n.T("This episode timed out opening; try again"))
 		}
 		return nil, "", fmt.Errorf("%s", tailLine(out))
 	}

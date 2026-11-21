@@ -6,12 +6,15 @@ import (
 	"runtime"
 
 	"github.com/egoist/mygo"
+
+	"codie-video-player/internal/i18n"
 )
 
 // The app's icon in the menu bar on macOS and the notification area on
 // Windows and Linux. While it sits there, closing the window leaves the app
 // at hand; the icon opens the window again, and its quit ends the app for
-// good — the only quit there is, short of the Dock's.
+// good — the only quit there is, short of the Dock's. The menu is built once
+// at startup, in the language of that moment.
 
 //go:embed tray/tray-template.png
 var trayTemplate []byte
@@ -31,16 +34,16 @@ func makeTray() {
 		ID:             "codie-video",
 		Icon:           icon,
 		IconIsTemplate: template,
-		ToolTip:        "Codie 视频",
+		ToolTip:        "Codie Video",
 		Menu: mygo.NewMenu([]*mygo.MenuItem{
-			{Label: "打开 Codie 视频", Click: func(*mygo.MenuItem, *mygo.Window) {
+			{Label: i18n.T("Open Codie Video"), Click: func(*mygo.MenuItem, *mygo.Window) {
 				if current != nil && current.win != nil {
 					current.win.Show()
 					current.win.Focus()
 				}
 			}},
 			mygo.Separator(),
-			{Label: "退出", Click: func(*mygo.MenuItem, *mygo.Window) {
+			{Label: i18n.T("Quit"), Click: func(*mygo.MenuItem, *mygo.Window) {
 				mygo.App.Quit()
 			}},
 		}),

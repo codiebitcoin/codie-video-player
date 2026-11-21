@@ -131,9 +131,9 @@ func TestShelfCaption(t *testing.T) {
 		e    watched
 		want string
 	}{
-		{watched{EpAt: 2, Ep: "大结局"}, "第3集 · 大结局"},
-		{watched{EpAt: 0, Ep: ""}, "第1集"},
-		{watched{EpAt: 5, Done: true}, "已看完"},
+		{watched{EpAt: 2, Ep: "大结局"}, "Ep 3 · 大结局"},
+		{watched{EpAt: 0, Ep: ""}, "Ep 1"},
+		{watched{EpAt: 5, Done: true}, "Finished"},
 	}
 	for _, tt := range tests {
 		if got := shelfCaption(tt.e); got != tt.want {
@@ -144,10 +144,10 @@ func TestShelfCaption(t *testing.T) {
 
 func TestCardBadge(t *testing.T) {
 	// A cover's badge names the episode, with the percent when it's known.
-	if got := cardBadge(&watched{EpAt: 3}); got != "第4集" {
+	if got := cardBadge(&watched{EpAt: 3}); got != "Ep 4" {
 		t.Errorf("cardBadge = %q", got)
 	}
-	if got := cardBadge(&watched{EpAt: 3, Pos: 90, Dur: 300}); got != "第4集 30%" {
+	if got := cardBadge(&watched{EpAt: 3, Pos: 90, Dur: 300}); got != "Ep 4 30%" {
 		t.Errorf("cardBadge with dur = %q", got)
 	}
 }

@@ -7,6 +7,8 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+
+	"codie-video-player/internal/i18n"
 )
 
 // The settings window: how the episode plays, what the app keeps, the
@@ -21,7 +23,7 @@ func (a *app) openSettingsWindow() {
 		return
 	}
 	a.settingsWin = mygo.NewWindow(mygo.WindowOptions{
-		Title:           "设置 — Codie 视频",
+		Title:           i18n.T("Settings — Codie Video"),
 		Width:           560,
 		Height:          640,
 		MinWidth:        460,
@@ -38,24 +40,25 @@ func (a *app) openSettingsWindow() {
 
 // settingsContent is what the settings window shows.
 func (a *app) settingsContent(c *ui.Context) {
+	a.applyPalette()
 	t := *c.Theme()
-	t.Dark = true
+	t.Dark = colors.Dark
 	t.Accent, t.AccentHover, t.AccentPressed = colors.accent, colors.accent, colors.accent
 	c.SetTheme(&t)
 	c.Root().Background(colors.bg)
 
 	ui.Column(c).Fill().Children(func() {
 		ui.Row(c).Height(topBarHeight).Padding(12, 16, 4, 16).Gap(10).AlignItems(ui.Center).DragWindow().Children(func() {
-			if b := iconButton(c.Key("settings-close"), iconX, 14, colors.muted, "关闭设置"); b.Clicked() {
+			if b := iconButton(c.Key("settings-close"), iconX, 14, colors.muted, i18n.T("Close Settings")); b.Clicked() {
 				a.settingsWin.Close()
 			}
-			ui.Text(c, "设置").FontSize(15).FontWeight(700)
+			ui.Text(c, i18n.T("Settings")).FontSize(15).FontWeight(700)
 			ui.Spacer(c)
 			if a.updateTag != "" {
 				b := ui.ButtonBase(c.Key("update")).Height(28).PaddingX(12).Radius(999).Center().
-					FocusRing(false).Label("新版本").Background(colors.accent.Alpha(0.18)).Border(1, colors.accent.Alpha(0.5))
+					FocusRing(false).Label(i18n.Tf("New %s", a.updateTag)).Background(colors.accent.Alpha(0.18)).Border(1, colors.accent.Alpha(0.5))
 				b.Children(func() {
-					ui.Text(c, "新版本 "+a.updateTag).FontSize(12.5).FontWeight(600).TextColor(colors.accent)
+					ui.Text(c, i18n.Tf("New %s", a.updateTag)).FontSize(12.5).FontWeight(600).TextColor(colors.accent)
 				})
 				if b.Clicked() {
 					go mygo.Shell.OpenExternal(a.updateURL)
@@ -64,15 +67,64 @@ func (a *app) settingsContent(c *ui.Context) {
 		})
 		ui.Scroll(c.Key("settings-scroll")).Fill().Padding(10, 24, 32, 24).Children(func() {
 			ui.Column(c).Fill().Gap(4).Children(func() {
-				a.settingsSection(c, "播放", func() {
-					a.settingsRow(c, "连播", "一集放完,下一集自己接上", func() {
+				a.settingsSection(c, i18n.T("Appearance"), func() {
+					a.settingsRow(c, i18n.T("Appearance"), i18n.T("Dark as a cinema, or light as daylight"), func() {
+						ui.Row(c).Gap(6).Children(func() {
+							for _, an := range appearanceNames {
+								chosen := a.settings.Appearance == an.id
+								b := ui.ButtonBase(c.Key("ap"+an.id)).Height(26).PaddingX(10).Radius(999).Center().
+									FocusRing(false).Label(i18n.T(an.key))
+								if chosen {
+									b.Background(colors.accent).TextColor(colors.onAccent)
+								} else {
+									b.Background(colors.hover).TextColor(colors.text)
+								}
+								b.Children(func() {
+									ui.Text(c, i18n.T(an.key)).FontSize(12).FontWeight(600)
+								})
+								if b.Clicked() {
+									a.settings.Appearance = an.id
+									a.settings.save()
+									a.rethemeWindows()
+								}
+							}
+						})
+					})
+				})
+				a.settingsSection(c, i18n.T("Language"), func() {
+					a.settingsRow(c, i18n.T("Language"), i18n.T("What the app's words read in"), func() {
+						ui.Row(c).Gap(6).Children(func() {
+							for _, ln := range languageNames() {
+								chosen := a.settings.Language == ln.id
+								b := ui.ButtonBase(c.Key("lang"+ln.id)).Height(26).PaddingX(10).Radius(999).Center().
+									FocusRing(false).Label(ln.key)
+								if chosen {
+									b.Background(colors.accent).TextColor(colors.onAccent)
+								} else {
+									b.Background(colors.hover).TextColor(colors.text)
+								}
+								b.Children(func() {
+									ui.Text(c, ln.key).FontSize(12).FontWeight(600)
+								})
+								if b.Clicked() {
+									a.settings.Language = ln.id
+									a.settings.save()
+									a.setLanguage()
+									a.rethemeWindows()
+								}
+							}
+						})
+					})
+				})
+				a.settingsSection(c, i18n.T("Playback"), func() {
+					a.settingsRow(c, i18n.T("Auto-play Next"), i18n.T("When an episode ends, the next one starts on its own"), func() {
 						on := !a.settings.NoAutoNext
 						if ui.Switch(c.Key("auto-next"), &on).Changed() {
 							a.settings.NoAutoNext = !on
 							a.settings.save()
 						}
 					})
-					a.settingsRow(c, "默认倍速", "每一次打开都按这个快慢放", func() {
+					a.settingsRow(c, i18n.T("Default Speed"), i18n.T("Every episode opens at this speed"), func() {
 						rates := []float64{0.75, 1, 1.25, 1.5, 2}
 						ui.Row(c).Gap(6).Children(func() {
 							for _, r := range rates {
@@ -93,11 +145,11 @@ func (a *app) settingsContent(c *ui.Context) {
 							}
 						})
 					})
-					a.settingsRow(c, "音量", "记着上次的音量,从这再来", func() {
+					a.settingsRow(c, i18n.T("Volume"), i18n.T("Remembers where the last run left it"), func() {
 						ui.Slider(c.Key("vol"), &a.vol, 0, 100).Width(160)
 					})
 				})
-				a.settingsSection(c, "插件", func() {
+				a.settingsSection(c, i18n.T("Plugins"), func() {
 					for _, p := range a.plugins {
 						info := p.Info()
 						on := !a.pluginDisabled(info.ID)
@@ -108,21 +160,21 @@ func (a *app) settingsContent(c *ui.Context) {
 							}
 						})
 					}
-					a.settingsRow(c, "安装插件", "一个 plugin.json 和 index.js 的文件夹", func() {
-						if ui.Button(c.Key("install"), "选择文件夹…").Clicked() {
+					a.settingsRow(c, i18n.T("Install Plugin"), i18n.T("A folder with a plugin.json and an index.js"), func() {
+						if ui.Button(c.Key("install"), i18n.T("Choose Folder…")).Clicked() {
 							a.installPluginDialog()
 						}
 					})
-					a.settingsRow(c, "插件目录", "把插件的文件夹放进去也行", func() {
-						if ui.Button(c.Key("open-dir"), "打开").Clicked() {
+					a.settingsRow(c, i18n.T("Plugins Folder"), i18n.T("Or drop plugin folders in there yourself"), func() {
+						if ui.Button(c.Key("open-dir"), i18n.T("Open")).Clicked() {
 							go mygo.Shell.OpenPath(pluginsDir())
 						}
 					})
 				})
-				a.settingsSection(c, "关于", func() {
-					a.settingsRow(c, "版本", mygo.App.Version(), nil)
-					a.settingsRow(c, "检查更新", updateLine(a.updateTag, a.updateChecking), func() {
-						label := "检查"
+				a.settingsSection(c, i18n.T("About"), func() {
+					a.settingsRow(c, i18n.T("Version"), mygo.App.Version(), nil)
+					a.settingsRow(c, i18n.T("Check for Updates"), updateLine(a.updateTag, a.updateChecking), func() {
+						label := i18n.T("Check")
 						if a.updateChecking {
 							label = "…"
 						}
@@ -130,8 +182,8 @@ func (a *app) settingsContent(c *ui.Context) {
 							a.checkUpdatesNow()
 						}
 					})
-					a.settingsRow(c, "仓库", "github.com/codiebitcoin/codie-video-player", func() {
-						if ui.Button(c.Key("repo"), "打开").Clicked() {
+					a.settingsRow(c, i18n.T("Repository"), "github.com/codiebitcoin/codie-video-player", func() {
+						if ui.Button(c.Key("repo"), i18n.T("Open")).Clicked() {
 							go mygo.Shell.OpenExternal("https://github.com/codiebitcoin/codie-video-player")
 						}
 					})
@@ -144,7 +196,7 @@ func (a *app) settingsContent(c *ui.Context) {
 // settingsSection is one block of settings: its name over its rows.
 func (a *app) settingsSection(c *ui.Context, name string, rows func()) {
 	ui.Column(c).Shrink(0).Padding(0, 0, 18, 0).Gap(2).Children(func() {
-		ui.Text(c, name).FontSize(13).FontWeight(700).TextColor(colors.muted).Padding(0, 0, 8, 0)
+		ui.Text(c, i18n.T(name)).FontSize(13).FontWeight(700).TextColor(colors.muted).Padding(0, 0, 8, 0)
 		rows()
 	})
 }
@@ -202,7 +254,7 @@ func (a *app) setPluginDisabled(id string, disabled bool) {
 // plugins' folder when it looks like one.
 func (a *app) installPluginDialog() {
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-		Title:     "选择插件文件夹(含 plugin.json)",
+		Title:     i18n.T("Choose a plugin folder (with a plugin.json)"),
 		Directory: true,
 	})
 	if err != nil || len(paths) == 0 {
@@ -230,10 +282,10 @@ func (a *app) installPluginDialog() {
 // updateLine says what the last check for updates made of it.
 func updateLine(tag string, checking bool) string {
 	if checking {
-		return "正在看仓库上有没有新的…"
+		return i18n.T("Asking the repo for a newer release…")
 	}
 	if tag != "" {
-		return "有新的 " + tag + " — 设置窗右上角可去取"
+		return i18n.Tf("New %s is out — the red dot in the corner takes you there", tag)
 	}
-	return "已是最新"
+	return i18n.T("Up to date")
 }

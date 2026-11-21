@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"codie-video-player/internal/i18n"
 	"codie-video-player/internal/video"
 )
 
@@ -50,7 +51,7 @@ func (a *app) searchAll(q string) {
 				a.gridLoading = false
 				g := searchGroup{id: e.id, name: e.name}
 				if err != nil {
-					g.err = videoProblem(err, "搜索失败")
+					g.err = videoProblem(err, i18n.T("Search failed"))
 				} else {
 					g.items = r.Items
 					for j := range g.items {
@@ -66,7 +67,7 @@ func (a *app) searchAll(q string) {
 	if asked == 0 {
 		a.post(func() {
 			a.gridLoading = false
-			a.gridErr = "现在的源不能搜索"
+			a.gridErr = i18n.T("None of the sources can search")
 		})
 	}
 }
@@ -89,7 +90,7 @@ func (a *app) searchProblems() string {
 	var lines []string
 	for _, g := range a.searchGroups {
 		if g.err != "" {
-			lines = append(lines, g.name+"："+g.err)
+			lines = append(lines, g.name+": "+g.err)
 		}
 	}
 	return strings.Join(lines, "\n")

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"codie-video-player/internal/codieout"
+	"codie-video-player/internal/i18n"
 	"codie-video-player/internal/video"
 )
 
@@ -38,7 +39,7 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 	a.playerErr = ""
 	a.playing = playing{item: item, ep: ep, at: at}
 	a.page = pagePlay
-	a.codieBusy = "正在为设备转码…"
+	a.codieBusy = i18n.T("Transcoding for the device…")
 	
 
 	log.Printf("codie play: transcoding started")
@@ -47,7 +48,7 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 	if err != nil {
 		a.post(func() {
 			a.codieBusy = ""
-			a.playerErr = videoProblem(err, "这一集放不了")
+			a.playerErr = videoProblem(err, i18n.T("This episode won’t play"))
 		})
 		return
 	}
@@ -55,7 +56,7 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 		os.Remove(dst)
 		a.post(func() {
 			a.codieBusy = ""
-			a.playerErr = "这一集转出来超过了设备收的 128MiB,暂时放不了"
+			a.playerErr = i18n.T("This episode transcodes past the device’s 128MiB cap, so it can’t play yet")
 		})
 		return
 	}
@@ -70,7 +71,7 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 		a.codieBusy = ""
 		if err != nil {
 			os.Remove(dst)
-			a.playerErr = videoProblem(err, "设备没有收这一集")
+			a.playerErr = videoProblem(err, i18n.T("The device didn’t take this episode"))
 			return
 		}
 		a.codieSession, a.codieFile = session, dst
@@ -86,7 +87,7 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 func (a *app) codieMakeMP4(s *video.Stream) (string, error) {
 	ffmpeg := findFFmpeg()
 	if ffmpeg == "" {
-		return "", errors.New("要装了 ffmpeg 才能把剧集转给设备:先用系统的包管理器装上,再放一次")
+		return "", errors.New(i18n.T("The device needs ffmpeg to take episodes; install it with your package manager and try again"))
 	}
 	f, err := os.CreateTemp("", "codie-codie-*.mp4")
 	if err != nil {
@@ -151,7 +152,7 @@ readLoop:
 			if err != nil {
 				os.Remove(dst)
 				if ctx.Err() != nil {
-					return "", errors.New("这一集转码超时了,请重试")
+					return "", errors.New(i18n.T("This episode timed out transcoding; try again"))
 				}
 				return "", fmt.Errorf("%s", tailLine(append(reader, buf...)))
 			}
@@ -160,7 +161,7 @@ readLoop:
 			if lastUS >= 0 && s.Type != "" {
 				a.post(func() {
 					if a.codieBusy != "" {
-						a.codieBusy = fmt.Sprintf("正在为设备转码… %d%%", percentOf(lastUS))
+						a.codieBusy = i18n.Tf("Transcoding for the device… %d%%", percentOf(lastUS))
 					}
 				})
 			}
@@ -181,7 +182,7 @@ readLoop:
 				if werr := <-done; werr != nil {
 					os.Remove(dst)
 					if ctx.Err() != nil {
-						return "", errors.New("这一集转码超时了,请重试")
+						return "", errors.New(i18n.T("This episode timed out transcoding; try again"))
 					}
 					return "", fmt.Errorf("%s", tailLine(reader))
 				}
@@ -347,7 +348,7 @@ func (a *app) codieStatus() string {
 	case a.playerErr != "":
 		return a.playerErr
 	case a.codieSession == "":
-		return "正在发送到设备…"
+		return i18n.T("Sending to the device…")
 	}
 	return ""
 }

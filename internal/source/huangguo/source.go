@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"codie-video-player/internal/i18n"
 	"codie-video-player/internal/video"
 )
 
@@ -18,7 +19,7 @@ type Source struct {
 }
 
 func (Source) Info() video.Info {
-	return video.Info{ID: "huangguo", Name: "黄果短剧"}
+	return video.Info{ID: "huangguo", Name: i18n.T("Huangguo Dramas")}
 }
 
 // Can says what the built-in source does: everything a source of videos can.
@@ -41,9 +42,9 @@ func (s *Source) tabs(ctx context.Context) []video.Tab {
 		}
 	}
 	tabs := []video.Tab{
-		{ID: "hot", Label: "热门"},
-		{ID: "all", Label: "最新"},
-		{ID: "year", Label: "今年"},
+		{ID: "hot", Label: i18n.T("Popular")},
+		{ID: "all", Label: i18n.T("Latest")},
+		{ID: "year", Label: i18n.T("This Year")},
 	}
 	for _, c := range s.cats {
 		tabs = append(tabs, video.Tab{ID: "cat:" + strconv.FormatInt(c.ID, 10), Label: c.Name})

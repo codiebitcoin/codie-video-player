@@ -8,6 +8,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"codie-video-player/internal/i18n"
 	"codie-video-player/internal/video"
 )
 
@@ -16,33 +17,13 @@ import (
 // in a drawer. Everything is the app's own drawing; the window's buttons sit
 // over the top bar.
 
-// colors are the page's, dark as a cinema's.
-var colors = struct {
-	bg, text, muted, faint, hairline, hover, press, accent, onAccent, scrub ui.Color
-}{
-	bg:       ui.Hex("#141416"),
-	text:     ui.Hex("#f5f5f7"),
-	muted:    ui.RGBA(235, 235, 245, 0.56),
-	faint:    ui.RGBA(235, 235, 245, 0.3),
-	hairline: ui.RGBA(255, 255, 255, 0.08),
-	hover:    ui.RGBA(255, 255, 255, 0.06),
-	press:    ui.RGBA(255, 255, 255, 0.1),
-	accent:   ui.Oklch(0.62, 0.21, 20),
-	onAccent: ui.Hex("#ffffff"),
-	scrub:    ui.Oklch(0.66, 0.16, 25),
-}
-
 // topBarHeight is the least height of the strip along the top.
 const topBarHeight = 40
 
 // view is the content of the window.
 func (a *app) view(c *ui.Context) {
-	t := *c.Theme()
-	t.Dark = true
-	t.Accent, t.AccentHover, t.AccentPressed = colors.accent, colors.accent, colors.accent
-	c.SetTheme(&t)
+	a.applyTheme(c)
 	root := c.Root()
-	root.Background(colors.bg)
 
 	// The keys the whole window answers, wherever the focus sits.
 	root.OnShortcut(0, ui.KeySpace, func() {
@@ -116,18 +97,18 @@ func (a *app) shortcutVolume(d float64) {
 func (a *app) topBar(c *ui.Context) {
 	ui.Row(c).Height(topBarHeight).Padding(12, 16, 4, 16).Gap(12).AlignItems(ui.Center).DragWindow().Children(func() {
 		if a.page != pageList {
-			if b := iconButton(c.Key("back"), iconBack, 16, colors.text, "返回"); b.Clicked() {
+			if b := iconButton(c.Key("back"), iconBack, 16, colors.text, i18n.T("Back")); b.Clicked() {
 				a.back()
 			}
 		}
 		if len(a.fwd) > 0 && a.page == pageList {
-			if b := iconButton(c.Key("forward"), iconForward, 16, colors.text, "前进"); b.Clicked() {
+			if b := iconButton(c.Key("forward"), iconForward, 16, colors.text, i18n.T("Forward")); b.Clicked() {
 				a.forward()
 			}
 		}
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, iconFilm).Size(17, 17).TextColor(colors.accent)
-			ui.Text(c, "Codie 视频").FontSize(15).FontWeight(700).SingleLine()
+			ui.Text(c, i18n.T("Codie Video")).FontSize(15).FontWeight(700).SingleLine()
 		})
 		if a.page == pageList {
 			ui.Spacer(c)
@@ -135,9 +116,9 @@ func (a *app) topBar(c *ui.Context) {
 		} else {
 			ui.Spacer(c)
 		}
-		// 设置:齿轮上一枚红点,仓库有新版本时它在。
+		// Settings: the gear carries a red dot while the repo has a newer release.
 		gear := ui.ButtonBase(c.Key("settings")).Size(31, 31).Center().Radius(999).
-			Label("设置").TextColor(colors.muted)
+			Label(i18n.T("Settings")).TextColor(colors.muted)
 		bg := ui.Transparent
 		if gear.Hovered() {
 			bg = ui.RGBA(255, 255, 255, 0.1)
@@ -153,9 +134,9 @@ func (a *app) topBar(c *ui.Context) {
 		if gear.Clicked() {
 			a.openSettingsWindow()
 		}
-		// 连接设备:带一个点,连上之后它是绿的。
+		// Connect Device: a dot beside it, green once paired.
 		b := ui.ButtonBase(c.Key("device")).Height(30).PaddingX(14).Radius(999).Gap(7).AlignItems(ui.Center).
-			FocusRing(false).Label("连接设备").TextColor(colors.text)
+			FocusRing(false).Label(i18n.T("Connect Device")).TextColor(colors.text)
 		if a.codie != nil {
 			b.Background(colors.hover).Border(1, ui.Oklch(0.75, 0.17, 145).Alpha(0.5))
 		} else {
@@ -167,7 +148,7 @@ func (a *app) topBar(c *ui.Context) {
 				dot = colors.accent
 			}
 			ui.Box(c).Size(7, 7).Radius(4).Background(dot)
-			ui.Text(c, "连接设备").FontSize(13).FontWeight(600)
+			ui.Text(c, i18n.T("Connect Device")).FontSize(13).FontWeight(600)
 		})
 		if b.Clicked() {
 			a.openDeviceWindow()
@@ -218,14 +199,14 @@ func (a *app) searchField(c *ui.Context) {
 			end = 28
 		}
 		in := ui.TextInputBase(c.Key("query"), &a.query).Bind(&a.searchBox).Grow(1).MinWidth(0).
-			PaddingStart(29).PaddingEnd(end).Placeholder("搜短剧、漫剧、视频").FontSize(13).Label("搜索")
+			PaddingStart(29).PaddingEnd(end).Placeholder(i18n.T("Search dramas, videos…")).FontSize(13).Label(i18n.T("Search"))
 		if in.Submitted() {
 			a.searchAll(a.query)
 		}
 		ui.Icon(c, iconSearch).Size(13, 13).TextColor(colors.muted).Absolute().Left(9).Top(7.5).IgnoreInput(true)
 		if clearable {
 			x := ui.ButtonBase(c.Key("clear")).Size(22, 22).Center().Absolute().Right(4).Top(4).
-				KeepFocus().FocusRing(false).Label("清除搜索")
+				KeepFocus().FocusRing(false).Label(i18n.T("Clear Search"))
 			if x.Clicked() {
 				a.query = ""
 				if a.searching {
@@ -248,7 +229,7 @@ func (a *app) searchField(c *ui.Context) {
 			Shadow(0, 10, 30, -8, ui.RGBA(0, 0, 0, 0.5)).Children(func() {
 			for _, s := range a.settings.SearchHistory {
 				h := ui.ButtonBase(c.Key("h"+s)).Height(28).PaddingX(10).Radius(6).AlignItems(ui.Center).
-					Justify(ui.Start).Gap(8).FocusRing(false).Label("搜索 "+s)
+					Justify(ui.Start).Gap(8).FocusRing(false).Label(i18n.Tf("Search %s", s))
 				if h.Hovered() {
 					h.Background(colors.hover)
 				}
@@ -271,8 +252,8 @@ func (a *app) listView(c *ui.Context) {
 	ui.Column(c).Fill().Children(func() {
 		if e := a.sourceEntry; e != nil && e.grant != nil {
 			ui.Row(c).Shrink(0).Padding(0, 20, 10, 20).Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "这个插件要启动 ffmpeg / yt-dlp 才能取流。").FontSize(13).TextColor(colors.muted).Grow(1)
-				if ui.Button(c.Key("grant"), "允许").Clicked() {
+				ui.Text(c, i18n.T("This plugin needs ffmpeg / yt-dlp to open streams.")).FontSize(13).TextColor(colors.muted).Grow(1)
+				if ui.Button(c.Key("grant"), i18n.T("Allow")).Clicked() {
 					a.grantSource(e.id)
 				}
 			})
@@ -298,7 +279,7 @@ func (a *app) listView(c *ui.Context) {
 func (a *app) searchView(c *ui.Context) {
 	if len(a.searchGroups) > 1 {
 		ui.Row(c).Shrink(0).Padding(0, 0, 12, 0).Gap(8).AlignItems(ui.Center).Children(func() {
-			a.searchChip(c, "all", "全部", a.countSearchItems())
+			a.searchChip(c, "all", i18n.T("All"), a.countSearchItems())
 			for _, g := range a.searchGroups {
 				if len(g.items) > 0 {
 					a.searchChip(c, g.id, g.name, len(g.items))
@@ -312,9 +293,9 @@ func (a *app) searchView(c *ui.Context) {
 	case a.gridLoading && len(a.searchGroups) == 0:
 		a.loading(c)
 	case len(items) == 0 && probs != "" && a.countSearchHits() == 0:
-		a.centered(c, probs, "再试一次", func() { a.searchAll(a.query) })
+		a.centered(c, probs, i18n.T("Try Again"), func() { a.searchAll(a.query) })
 	case len(items) == 0 && len(a.searchGroups) > 0:
-		a.centered(c, "没找到「"+a.query+"」", "", nil)
+		a.centered(c, i18n.Tf("Nothing found for “%s”", a.query), "", nil)
 	case len(items) == 0:
 		a.loading(c)
 	default:
@@ -349,7 +330,7 @@ func (a *app) countSearchHits() int {
 func (a *app) searchChip(c *ui.Context, id, name string, n int) {
 	chosen := a.searchFilter == id
 	b := ui.ButtonBase(c.Key("f"+id)).Height(28).PaddingX(12).Radius(999).Center().Gap(6).
-		FocusRing(false).Label("来源 "+name)
+		FocusRing(false).Label(i18n.Tf("Source %s", name))
 	switch {
 	case chosen:
 		b.Background(colors.accent).TextColor(colors.onAccent)
@@ -383,10 +364,10 @@ func (a *app) shelves(c *ui.Context) {
 		return
 	}
 	if len(a.lib.Follows) > 0 {
-		a.shelf(c, "追剧", iconHeart, a.lib.Follows)
+		a.shelf(c, i18n.T("Following"), iconHeart, a.lib.Follows)
 	}
 	if len(a.lib.History) > 0 {
-		a.shelf(c, "继续观看", iconClock, a.lib.History)
+		a.shelf(c, i18n.T("Continue Watching"), iconClock, a.lib.History)
 	}
 }
 
@@ -437,13 +418,13 @@ func (a *app) shelfCard(c *ui.Context, e watched) {
 // it came to its end.
 func shelfCaption(e watched) string {
 	if e.Done {
-		return "已看完"
+		return i18n.T("Finished")
 	}
-	at := e.EpAt + 1
+	at := i18n.Tf("Ep %d", e.EpAt+1)
 	if e.Ep != "" {
-		return "第" + strconv.Itoa(at) + "集 · " + e.Ep
+		return at + " · " + e.Ep
 	}
-	return "第" + strconv.Itoa(at) + "集"
+	return at
 }
 
 // resumeWatch takes a drama of the shelves up where it stopped.
@@ -498,7 +479,7 @@ func (a *app) grid(c *ui.Context) {
 	case (a.gridLoading || a.tabsLoading) && len(a.items) == 0:
 		a.skeleton(c)
 	case len(a.items) == 0 && a.tabID != "":
-		a.centered(c, "这里还没有内容", "", nil)
+		a.centered(c, i18n.T("Nothing here yet"), "", nil)
 	case len(a.items) == 0:
 		a.skeleton(c)
 	default:
@@ -509,7 +490,7 @@ func (a *app) grid(c *ui.Context) {
 			})
 		} else {
 			ui.Row(c).Center().Padding(16, 0, 0, 0).Children(func() {
-				if ui.Button(c.Key("more"), "加载更多").Clicked() {
+				if ui.Button(c.Key("more"), i18n.T("Load More")).Clicked() {
 					a.loadMore()
 				}
 			})
@@ -524,7 +505,7 @@ func (a *app) gridError(c *ui.Context, msg string) {
 		ui.Icon(c, iconFilm).Size(30, 30).TextColor(colors.faint)
 		ui.Text(c, msg).TextColor(colors.muted).FontSize(13).TextAlign(ui.Center).MaxWidth(520)
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c.Key("retry"), "重试").Clicked() {
+			if ui.Button(c.Key("retry"), i18n.T("Retry")).Clicked() {
 				a.loadTabs()
 				a.loadTab()
 			}
@@ -533,7 +514,7 @@ func (a *app) gridError(c *ui.Context, msg string) {
 				if a.sourceEntry != nil && e.id == a.sourceEntry.id {
 					continue
 				}
-				if ui.Button(c.Key("go"+e.id), "去"+e.name).Clicked() {
+				if ui.Button(c.Key("go"+e.id), i18n.Tf("Switch to %s", e.name)).Clicked() {
 					a.useSource(e.id)
 				}
 			}
@@ -609,7 +590,7 @@ func (a *app) card(c *ui.Context, it *video.Item) {
 
 // cardBadge says on a cover which episode is on, and how far into it.
 func cardBadge(p *watched) string {
-	s := "第" + strconv.Itoa(p.EpAt+1) + "集"
+	s := i18n.Tf("Ep %d", p.EpAt+1)
 	if p.Dur > 0 && p.Pos > 0 {
 		s += " " + strconv.Itoa(int(p.Pos/p.Dur*100)) + "%"
 	}
@@ -669,16 +650,16 @@ func (a *app) detailView(c *ui.Context) {
 					ui.Text(c, d.Title).FontSize(26).FontWeight(800).LetterSpacing(-0.4).MaxLines(2).LineHeight(1.2)
 					meta := d.Subtitle
 					if d.Finished {
-						meta = strings.TrimSpace(meta + " · 已完结")
+						meta = strings.TrimSpace(meta + " · " + i18n.T("Completed"))
 					} else if len(d.Episodes) > 0 {
-						meta = strings.TrimSpace(meta + " · 连载中")
+						meta = strings.TrimSpace(meta + " · " + i18n.T("Ongoing"))
 					}
 					if meta != "" {
 						ui.Text(c, meta).FontSize(13).TextColor(colors.muted)
 					}
 					ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(4, 0, 0, 0).Children(func() {
 						if d.Score != "" {
-							ui.Text(c, "评分 "+d.Score).FontSize(13).TextColor(colors.accent).FontWeight(600)
+							ui.Text(c, i18n.Tf("Score %s", d.Score)).FontSize(13).TextColor(colors.accent).FontWeight(600)
 						}
 						heart := iconHeart
 						hcolor := colors.muted
@@ -687,11 +668,11 @@ func (a *app) detailView(c *ui.Context) {
 							hcolor = colors.accent
 						}
 						fb := ui.ButtonBase(c.Key("follow")).Height(32).PaddingX(14).Radius(999).Center().Gap(7).
-							FocusRing(false).Label("追剧").Border(1, colors.hairline).TextColor(hcolor)
+							FocusRing(false).Label(i18n.T("Follow")).Border(1, colors.hairline).TextColor(hcolor)
 						fb.Background(colors.hover)
 						fb.Children(func() {
 							ui.Icon(c, heart).Size(14, 14)
-							ui.Text(c, map[bool]string{true: "已追", false: "追剧"}[a.lib.followed(d.ID)]).FontSize(13).FontWeight(600)
+							ui.Text(c, map[bool]string{true: i18n.T("Following"), false: i18n.T("Follow")}[a.lib.followed(d.ID)]).FontSize(13).FontWeight(600)
 						})
 						if fb.Clicked() {
 							a.lib.toggleFollow(d.Item)
@@ -708,9 +689,9 @@ func (a *app) detailView(c *ui.Context) {
 			case a.detailLoading && len(d.Episodes) == 0:
 				a.loading(c)
 			case a.detailErr != "" && len(d.Episodes) == 0:
-				a.centered(c, a.detailErr, "重试", func() { a.openDetail(d.Item) })
+				a.centered(c, a.detailErr, i18n.T("Retry"), func() { a.openDetail(d.Item) })
 			case len(d.Episodes) == 0:
-				a.centered(c, "这部剧还没有可播放的剧集", "", nil)
+				a.centered(c, i18n.T("No playable episodes for this drama"), "", nil)
 			default:
 				a.episodes(c, d)
 			}
@@ -727,7 +708,7 @@ func (a *app) detailActions(c *ui.Context, d *video.Video) {
 	p := a.lib.progressOf(d.ID)
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(10, 0, 0, 0).Children(func() {
 		at, ep := 0, d.Episodes[0]
-		label := "播放"
+		label := i18n.T("Play")
 		if p != nil && !p.Done && p.Pos > 10 {
 			for i := range d.Episodes {
 				if d.Episodes[i].ID == p.EpID {
@@ -735,12 +716,12 @@ func (a *app) detailActions(c *ui.Context, d *video.Video) {
 					break
 				}
 			}
-			label = "继续播放 · 第" + strconv.Itoa(at+1) + "集"
+			label = i18n.Tf("Continue · Ep %d", at+1)
 			if p.Dur > 0 {
 				label += " · " + clock(time.Duration(p.Pos) * time.Second)
 			}
 		} else if len(d.Episodes) > 1 {
-			label = "播放第1集"
+			label = i18n.T("Play Episode 1")
 		}
 		play := ui.ButtonBase(c.Key("play-first")).Height(36).PaddingX(18).Radius(999).Center().Gap(8).
 			FocusRing(false).Label(label).Background(colors.accent).TextColor(colors.onAccent)
@@ -759,9 +740,9 @@ func (a *app) detailActions(c *ui.Context, d *video.Video) {
 func (a *app) episodes(c *ui.Context, d *video.Video) {
 	p := a.lib.progressOf(d.ID)
 	ui.Row(c).Margin(14, 0, 10, 0).Children(func() {
-		ui.Text(c, "剧集").FontSize(17).FontWeight(700)
+		ui.Text(c, i18n.T("Episodes")).FontSize(17).FontWeight(700)
 		ui.Spacer(c)
-		ui.Text(c, itoa(len(d.Episodes))+" 集").FontSize(13).TextColor(colors.muted)
+		ui.Text(c, i18n.Tf("%d episodes", len(d.Episodes))).FontSize(13).TextColor(colors.muted)
 	})
 	if len(d.Episodes) > 60 {
 		ui.List(c.Key("eps"), &a.epsList, len(d.Episodes), func(i int) {
@@ -857,7 +838,7 @@ func (a *app) playView(c *ui.Context) {
 	ui.Box(c).Fill().Background(ui.RGB(0, 0, 0)).Children(func() {
 		// The stage answers the pointer: a move brings the controls, a click
 		// plays or pauses, a double click takes the whole screen.
-		stage := ui.ButtonBase(c.Key("stage")).Fill().Center().FocusRing(false).Label("画面")
+		stage := ui.ButtonBase(c.Key("stage")).Fill().Center().FocusRing(false).Label(i18n.T("Video"))
 		stage.Background(ui.Transparent)
 		stage.Children(func() {
 			a.stageContent(c, playing)
@@ -890,19 +871,19 @@ func (a *app) stageContent(c *ui.Context, playing playing) {
 	case a.pipActive():
 		ui.Column(c).Gap(12).Center().Children(func() {
 			ui.Icon(c, iconPip).Size(28, 28).TextColor(ui.RGBA(255, 255, 255, 0.35))
-			ui.Text(c, "正在小窗播放").FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.55))
-			if ui.Button(c.Key("back-main"), "回到主窗口").Clicked() {
+			ui.Text(c, i18n.T("Playing in the mini window")).FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.55))
+			if ui.Button(c.Key("back-main"), i18n.T("Back to Main Window")).Clicked() {
 				a.closePip()
 			}
 		})
 	case a.deviceOutput && a.codie != nil:
-		// 画面在设备的屏幕上;这里只说状态。
+		// The picture is on the device's screen; this only says where things stand.
 		ui.Column(c).Gap(12).Center().Children(func() {
 			ui.Icon(c, iconFilm).Size(28, 28).TextColor(ui.RGBA(255, 255, 255, 0.35))
 			switch {
 			case a.playerErr != "":
 				ui.Text(c, a.playerErr).TextColor(ui.RGB(255, 255, 255)).FontSize(13).TextAlign(ui.Center).MaxWidth(420)
-				if ui.Button(c.Key("retry"), "重试").Clicked() {
+				if ui.Button(c.Key("retry"), i18n.T("Retry")).Clicked() {
 					a.playEpisode(playing.item, playing.ep, playing.at)
 				}
 			case a.codieBusy != "":
@@ -911,7 +892,7 @@ func (a *app) stageContent(c *ui.Context, playing playing) {
 					ui.Text(c, a.codieBusy).FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.7))
 				})
 			default:
-				ui.Text(c, "画面在 codie 设备的屏幕上").FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.55))
+				ui.Text(c, i18n.T("Playing on the codie device’s screen")).FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.55))
 			}
 		})
 	default:
@@ -927,7 +908,7 @@ func (a *app) stageContent(c *ui.Context, playing playing) {
 		case a.playerErr != "":
 			ui.Column(c).Gap(12).Center().Children(func() {
 				ui.Text(c, a.playerErr).TextColor(ui.RGB(255, 255, 255)).FontSize(13).TextAlign(ui.Center).MaxWidth(420)
-				if ui.Button(c.Key("retry"), "重试").Clicked() {
+				if ui.Button(c.Key("retry"), i18n.T("Retry")).Clicked() {
 					a.playEpisode(playing.item, playing.ep, playing.at)
 				}
 			})
@@ -972,16 +953,16 @@ func (a *app) playOverlays(c *ui.Context, playing playing) {
 				Background(ui.RGBA(0, 0, 0, 0.72)).Border(1, colors.hairline)
 			banner.Children(func() {
 				if d := a.detail; d != nil && a.playing.at+1 < len(d.Episodes) {
-					ui.Text(c, "即将播放 "+d.Episodes[a.playing.at+1].Title).FontSize(13).TextColor(colors.text).SingleLine()
+					ui.Text(c, i18n.Tf("Up next: %s", d.Episodes[a.playing.at+1].Title)).FontSize(13).TextColor(colors.text).SingleLine()
 				} else {
-					ui.Text(c, "即将播放下一集").FontSize(13).TextColor(colors.text)
+					ui.Text(c, i18n.T("Up next")).FontSize(13).TextColor(colors.text)
 				}
-				ui.Text(c, strconv.Itoa(a.nextLeft)+" 秒").FontSize(13).TextColor(colors.muted)
-				if ui.Button(c.Key("next-now"), "立即播放").Clicked() {
+				ui.Text(c, i18n.Tf("%d s", a.nextLeft)).FontSize(13).TextColor(colors.muted)
+				if ui.Button(c.Key("next-now"), i18n.T("Play Now")).Clicked() {
 					a.cancelNext()
 					a.nextEpisode(false)
 				}
-				if ui.Button(c.Key("next-cancel"), "取消").Clicked() {
+				if ui.Button(c.Key("next-cancel"), i18n.T("Cancel")).Clicked() {
 					a.cancelNext()
 					a.win.Invalidate()
 				}
@@ -998,7 +979,7 @@ func (a *app) playOverlays(c *ui.Context, playing playing) {
 // for good once taken.
 func (a *app) wizard(c *ui.Context) {
 	veil := ui.ButtonBase(c.Key("wizard-veil")).Absolute().Top(0).Left(0).Right(0).Bottom(0).
-		FocusRing(false).Label("关闭引导")
+		FocusRing(false).Label(i18n.T("Dismiss"))
 	veil.Background(ui.RGBA(0, 0, 0, 0.6))
 	if veil.Clicked() {
 		a.settings.WizardDone = true
@@ -1012,15 +993,15 @@ func (a *app) wizard(c *ui.Context) {
 		card.Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, iconFilm).Size(18, 18).TextColor(colors.accent)
-				ui.Text(c, "欢迎使用 Codie 视频").FontSize(17).FontWeight(800)
+				ui.Text(c, i18n.T("Welcome to Codie Video")).FontSize(17).FontWeight(800)
 			})
 			for _, line := range []struct {
 				icon *ui.SVG
 				text string
 			}{
-				{iconSearch, "左上角切换来源,搜短剧、漫剧和视频,结果按来源分好"},
-				{iconClock, "看过的剧在「继续观看」里接着看,喜欢的点「追剧」收着"},
-				{iconPip, "点「连接设备」配对 codie,剧就投到它的屏幕上;小窗里边逛边看"},
+				{iconSearch, i18n.T("Pick a source at the top; searches go to every source at once")},
+				{iconClock, i18n.T("What you watch lands in Continue Watching; Follow keeps a drama close")},
+				{iconPip, i18n.T("Connect Device pairs a codie to play on; the mini window watches while you browse")},
 			} {
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Justify(ui.Start).Children(func() {
 					ui.Icon(c, line.icon).Size(15, 15).TextColor(colors.accent)
@@ -1028,9 +1009,9 @@ func (a *app) wizard(c *ui.Context) {
 				})
 			}
 			start := ui.ButtonBase(c.Key("wizard-go")).Height(36).PaddingX(20).Radius(999).Center().
-				FocusRing(false).Label("开始看剧").Background(colors.accent).TextColor(colors.onAccent)
+				FocusRing(false).Label(i18n.T("Start Watching")).Background(colors.accent).TextColor(colors.onAccent)
 			start.Children(func() {
-				ui.Text(c, "开始看剧").FontSize(13.5).FontWeight(700)
+				ui.Text(c, i18n.T("Start Watching")).FontSize(13.5).FontWeight(700)
 			})
 			if start.Clicked() {
 				a.settings.WizardDone = true
@@ -1047,7 +1028,7 @@ func (a *app) drawer(c *ui.Context) {
 		return
 	}
 	veil := ui.ButtonBase(c.Key("drawer-veil")).Absolute().Top(0).Left(0).Right(0).Bottom(0).
-		FocusRing(false).Label("关闭选集")
+		FocusRing(false).Label(i18n.T("Close Episodes"))
 	veil.Background(ui.RGBA(0, 0, 0, 0.45))
 	if veil.Clicked() {
 		a.drawerOpen = false
@@ -1057,9 +1038,9 @@ func (a *app) drawer(c *ui.Context) {
 		panel := ui.Column(c).Width(330).Absolute().Top(0).Right(0).Bottom(0).
 			Background(ui.RGBA(16, 16, 18, 0.97)).Border(1, colors.hairline).Children(func() {
 			ui.Row(c).Height(48).Shrink(0).Padding(0, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "选集").FontSize(15).FontWeight(700).Grow(1)
-				ui.Text(c, itoa(len(d.Episodes))+" 集").FontSize(12).TextColor(colors.muted)
-				if b := iconButton(c.Key("drawer-close"), iconX, 13, colors.muted, "关闭选集"); b.Clicked() {
+				ui.Text(c, i18n.T("Episodes")).FontSize(15).FontWeight(700).Grow(1)
+				ui.Text(c, i18n.Tf("%d episodes", len(d.Episodes))).FontSize(12).TextColor(colors.muted)
+				if b := iconButton(c.Key("drawer-close"), iconX, 13, colors.muted, i18n.T("Close Episodes")); b.Clicked() {
 					a.drawerOpen = false
 					a.wakeControls()
 				}
@@ -1126,7 +1107,7 @@ func (a *app) controlsBody(c *ui.Context, playing playing) {
 			ui.Text(c, ep).FontSize(12.5).TextColor(colors.muted).Shrink(0).SingleLine()
 		}
 		if a.nextLeft > 0 {
-			ui.Text(c, strconv.Itoa(a.nextLeft)+"秒后连播").FontSize(12).TextColor(colors.accent).Shrink(0)
+			ui.Text(c, i18n.Tf("Next in %d s", a.nextLeft)).FontSize(12).TextColor(colors.accent).Shrink(0)
 		}
 	})
 	if a.deviceOutput && a.codie != nil {
@@ -1142,7 +1123,7 @@ func (a *app) controlsBody(c *ui.Context, playing playing) {
 	ui.Row(c).Height(38).Gap(6).AlignItems(ui.Center).Children(func() {
 		d := a.detail
 		if d != nil && a.hasEpisode(-1) {
-			if b := iconButton(c.Key("prev"), iconPrev, 15, colors.text, "上一集"); b.Clicked() {
+			if b := iconButton(c.Key("prev"), iconPrev, 15, colors.text, i18n.T("Previous Episode")); b.Clicked() {
 				a.nextEpisode(true)
 			}
 		}
@@ -1151,7 +1132,7 @@ func (a *app) controlsBody(c *ui.Context, playing playing) {
 			if a.codieState != nil && a.codieState.IsPlaying {
 				icon = iconPause
 			}
-			if b := iconButton(c.Key("play"), icon, 17, colors.text, "播放/暂停"); b.Clicked() {
+			if b := iconButton(c.Key("play"), icon, 17, colors.text, i18n.T("Play/Pause")); b.Clicked() {
 				a.codiePlayPause()
 			}
 		} else if player := a.player; player != nil {
@@ -1159,29 +1140,29 @@ func (a *app) controlsBody(c *ui.Context, playing playing) {
 			if player.Playing() {
 				icon = iconPause
 			}
-			if b := iconButton(c.Key("play"), icon, 17, colors.text, "播放/暂停"); b.Clicked() {
+			if b := iconButton(c.Key("play"), icon, 17, colors.text, i18n.T("Play/Pause")); b.Clicked() {
 				a.playPause()
 			}
 		} else {
-			iconButton(c.Key("play"), iconPlay, 17, colors.faint, "播放/暂停")
+			iconButton(c.Key("play"), iconPlay, 17, colors.faint, i18n.T("Play/Pause"))
 		}
 		if d != nil && a.hasEpisode(1) {
-			if b := iconButton(c.Key("next"), iconNext, 15, colors.text, "下一集"); b.Clicked() {
+			if b := iconButton(c.Key("next"), iconNext, 15, colors.text, i18n.T("Next Episode")); b.Clicked() {
 				a.cancelNext()
 				a.nextEpisode(false)
 			}
 		}
 		ui.Spacer(c)
-		// 选集:一按,剧集的抽屉就来。
+		// Episodes: one press, and the drawer of episodes comes.
 		if d != nil && len(d.Episodes) > 0 {
 			b := ui.ButtonBase(c.Key("drawer")).Height(30).PaddingX(12).Radius(999).Center().Gap(6).
-				FocusRing(false).Label("选集")
+				FocusRing(false).Label(i18n.T("Episodes"))
 			if a.drawerOpen {
 				b.Background(colors.hover)
 			}
 			b.Children(func() {
 				ui.Icon(c, iconList).Size(13, 13).TextColor(colors.text)
-				ui.Text(c, "选集").FontSize(12.5).FontWeight(600).TextColor(colors.text)
+				ui.Text(c, i18n.T("Episodes")).FontSize(12.5).FontWeight(600).TextColor(colors.text)
 			})
 			if b.Clicked() {
 				a.drawerOpen = !a.drawerOpen
@@ -1189,22 +1170,22 @@ func (a *app) controlsBody(c *ui.Context, playing playing) {
 				a.wakeControls()
 			}
 		}
-		// 倍速:一按,快慢的单一选项浮上来。
+		// Speed: one press, and the rates float up over it.
 		if !a.deviceOutput && a.player != nil {
 			a.speedControl(c)
 		}
-		// 小窗:边逛边看。
+		// Mini Player: watch on while browsing.
 		if !a.deviceOutput && a.player != nil {
-			if b := iconButton(c.Key("pip"), iconPip, 15, colors.text, "小窗播放"); b.Clicked() {
+			if b := iconButton(c.Key("pip"), iconPip, 15, colors.text, i18n.T("Mini Player")); b.Clicked() {
 				a.openPip()
 			}
 		}
-		// 全屏:整个屏幕都是画面。
+		// Fullscreen: the whole screen is the picture.
 		fs := iconMaximize
 		if a.fullscreen {
 			fs = iconRestore
 		}
-		if b := iconButton(c.Key("fs"), fs, 15, colors.text, "全屏"); b.Clicked() {
+		if b := iconButton(c.Key("fs"), fs, 15, colors.text, i18n.T("Fullscreen")); b.Clicked() {
 			a.toggleFullscreen()
 		}
 		if a.deviceOutput && a.codie != nil {
@@ -1222,7 +1203,7 @@ func (a *app) controlsBody(c *ui.Context, playing playing) {
 // when taken.
 func (a *app) speedControl(c *ui.Context) {
 	b := ui.ButtonBase(c.Key("speed")).Height(30).PaddingX(10).Radius(999).Center().Gap(5).
-		FocusRing(false).Label("倍速")
+		FocusRing(false).Label(i18n.T("Speed"))
 	if a.speedOpen {
 		b.Background(colors.hover)
 	}
@@ -1307,7 +1288,7 @@ func (a *app) scrubber(c *ui.Context, player *ui.VideoPlayer) {
 	if !st.active && !st.held {
 		st.v = player.Position().Seconds()
 	}
-	s := ui.SliderBase(c, &st.v, 0, max(dur, 1)).Height(20).FocusRing(false).Label("进度").Cursor(ui.CursorPointer)
+	s := ui.SliderBase(c, &st.v, 0, max(dur, 1)).Height(20).FocusRing(false).Label(i18n.T("Progress")).Cursor(ui.CursorPointer)
 	s.HandleInput(func(ev ui.InputEvent) bool {
 		switch ev.Kind {
 		case ui.InputPointerDown:
@@ -1364,7 +1345,7 @@ func (a *app) volume(c *ui.Context, player *ui.VideoPlayer) {
 	} else if a.vol < 50 {
 		icon = iconVolumeLow
 	}
-	if b := iconButton(c.Key("mute"), icon, 14, colors.muted, "静音"); b.Clicked() {
+	if b := iconButton(c.Key("mute"), icon, 14, colors.muted, i18n.T("Mute")); b.Clicked() {
 		player.SetMuted(!player.Muted())
 	}
 	sl := ui.Slider(c.Key("vol"), &a.vol, 0, 100).Width(90)
@@ -1374,7 +1355,7 @@ func (a *app) volume(c *ui.Context, player *ui.VideoPlayer) {
 	}
 }
 
-// outputToggle is 本机 and codie, the two places an episode plays.
+// outputToggle is Local and codie, the two places an episode plays.
 func (a *app) outputToggle(c *ui.Context) {
 	if a.codie == nil {
 		return
@@ -1383,8 +1364,8 @@ func (a *app) outputToggle(c *ui.Context) {
 		for _, o := range []struct {
 			label string
 			on    bool
-		}{{"本机", !a.deviceOutput}, {"codie", a.deviceOutput}} {
-			b := ui.ButtonBase(c.Key(o.label)).Height(26).PaddingX(12).Radius(999).Center().FocusRing(false).Label(o.label)
+		}{{"Local", !a.deviceOutput}, {"codie", a.deviceOutput}} {
+			b := ui.ButtonBase(c.Key(o.label)).Height(26).PaddingX(12).Radius(999).Center().FocusRing(false).Label(i18n.T(o.label))
 			if o.on {
 				b.Background(colors.hover).TextColor(colors.text)
 			} else {
@@ -1393,7 +1374,7 @@ func (a *app) outputToggle(c *ui.Context) {
 					b.Background(colors.hover)
 				}
 			}
-			b.Children(func() { ui.Text(c, o.label).FontSize(12.5).FontWeight(600) })
+			b.Children(func() { ui.Text(c, i18n.T(o.label)).FontSize(12.5).FontWeight(600) })
 			if b.Clicked() {
 				a.codieToggle(o.on)
 			}
@@ -1409,7 +1390,7 @@ func (a *app) codieScrubber(c *ui.Context) {
 	if !st.active && !st.held {
 		st.v = pos.Seconds()
 	}
-	s := ui.SliderBase(c, &st.v, 0, max(secs, 1)).Height(20).FocusRing(false).Label("进度").Cursor(ui.CursorPointer)
+	s := ui.SliderBase(c, &st.v, 0, max(secs, 1)).Height(20).FocusRing(false).Label(i18n.T("Progress")).Cursor(ui.CursorPointer)
 	s.HandleInput(func(ev ui.InputEvent) bool {
 		switch ev.Kind {
 		case ui.InputPointerDown:
@@ -1473,7 +1454,7 @@ func (a *app) codieVolumeControl(c *ui.Context) {
 	} else if a.vol < 50 {
 		icon = iconVolumeLow
 	}
-	if b := iconButton(c.Key("mute"), icon, 14, colors.muted, "静音"); b.Clicked() {
+	if b := iconButton(c.Key("mute"), icon, 14, colors.muted, i18n.T("Mute")); b.Clicked() {
 		a.vol = map[bool]float64{true: 0, false: 100}[a.vol == 0]
 		a.setVolume(a.vol)
 		a.codieVolume(a.vol / 100)
@@ -1507,7 +1488,7 @@ func iconButton(c *ui.Context, icon *ui.SVG, size float32, color ui.Color, label
 func (a *app) opening(c *ui.Context) {
 	ui.Row(c).Gap(10).Center().Children(func() {
 		ui.Spinner(c).TextColor(ui.RGBA(255, 255, 255, 0.7))
-		ui.Text(c, "打开中…").FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.7))
+		ui.Text(c, i18n.T("Opening…")).FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.7))
 	})
 }
 
@@ -1515,7 +1496,7 @@ func (a *app) opening(c *ui.Context) {
 func (a *app) loading(c *ui.Context) {
 	ui.Row(c).Fill().Justify(ui.Center).AlignItems(ui.Center).Padding(60, 0, 0, 0).Children(func() {
 		ui.Spinner(c).Size(18, 18).Margin(0, 8, 0, 0)
-		ui.Text(c, "加载中…").FontSize(13).TextColor(colors.muted)
+		ui.Text(c, i18n.T("Loading…")).FontSize(13).TextColor(colors.muted)
 	})
 }
 

@@ -10,7 +10,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -170,6 +169,14 @@ func Run(bundledPlugins embed.FS) error {
 	mygo.App.WhenReady(func() {
 		a.settings = loadSettings()
 		a.lib = loadLibrary(userDataDir(""))
+		if a.settings.Appearance == "" {
+			a.settings.Appearance = AppearanceSystem
+		}
+		if a.settings.Language == "" {
+			a.settings.Language = i18n.System
+		}
+		a.setLanguage()
+		a.applyPalette()
 		a.vol = a.settings.Volume
 		if a.vol <= 0 {
 			a.vol = 100
@@ -180,11 +187,10 @@ func Run(bundledPlugins embed.FS) error {
 		}
 		a.makeSources(bundledPlugins)
 		a.loadCodie()
-		i18nReady()
 		a.checkForUpdates()
 		makeTray()
 		a.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:     "Codie 视频",
+			Title:     i18n.T("Codie Video"),
 			Width:     1180,
 			Height:    760,
 			MinWidth:  920,
@@ -240,7 +246,7 @@ func (a *app) makeSources(bundledPlugins embed.FS) {
 	plugin.SetOpenURL(mygo.Shell.OpenExternal)
 	plugin.SetAppVersion(mygo.App.Version())
 	plugin.SetWebSignIn(func(plugin.WebSignIn) (string, error) {
-		return "", errors.New("这个应用不登录账号")
+		return "", errors.New(i18n.T("This app doesn\u2019t sign in to accounts"))
 	})
 	ensureBundledPlugins(bundledPlugins)
 	a.plugins = plugin.Discover(pluginsDir(), userDataDir("plugin-data"))
@@ -341,7 +347,7 @@ func (a *app) loadTabs() {
 				return
 			}
 			if err != nil {
-				a.tabsErr = videoProblem(err, "这个源的分类没加载出来")
+				a.tabsErr = videoProblem(err, i18n.T("Couldn\u2019t load this source\u2019s categories"))
 			}
 		})
 	}()
@@ -409,7 +415,7 @@ func (a *app) loadMore() {
 					time.AfterFunc(1200*time.Millisecond, func() { a.post(a.loadMore) })
 					return
 				}
-				a.gridErr = videoProblem(err, "这一页没加载出来")
+				a.gridErr = videoProblem(err, i18n.T("Couldn’t load this page"))
 				return
 			}
 			a.gridPage = next
@@ -446,7 +452,7 @@ func (a *app) openDetail(item video.Item) {
 			}
 			a.detailLoading = false
 			if err != nil {
-				a.detailErr = videoProblem(err, "这部剧没加载出来")
+				a.detailErr = videoProblem(err, i18n.T("Couldn’t load this drama"))
 				return
 			}
 			a.detail = v
@@ -508,7 +514,7 @@ func (a *app) playEpisode(item video.Item, ep video.Episode, at int) {
 				a.post(func() {
 					a.page = pagePlay
 					a.playing = playing{item: item, ep: ep, at: at}
-					a.playerErr = videoProblem(err, "这一集放不了")
+					a.playerErr = videoProblem(err, i18n.T("This episode won\u2019t play"))
 				})
 				return
 			}
@@ -522,7 +528,7 @@ func (a *app) playEpisode(item video.Item, ep video.Episode, at int) {
 	go func() {
 		s, err := src.src.Play(item.ID, ep.ID)
 		if err != nil {
-			a.post(func() { a.playerErr = videoProblem(err, "这一集放不了") })
+			a.post(func() { a.playerErr = videoProblem(err, i18n.T("This episode won\u2019t play")) })
 			return
 		}
 		p, file, err := openEpisodeStream(s)
@@ -716,7 +722,7 @@ func videoProblem(err error, msg string) string {
 	return msg + ": " + err.Error()
 }
 
-// settings is what the app keeps of the listener's.
+// settings is what the app keeps of the viewer's.
 type settings struct {
 	Source string `json:"source,omitempty"`
 	// Volume is how loud, from 0 to 100; Rate, how many times the usual
@@ -736,7 +742,11 @@ type settings struct {
 	UpdatesChecked time.Time `json:"updatesChecked,omitzero"`
 	// DisabledPlugins are the ids of the plugins turned off.
 	DisabledPlugins []string `json:"disabledPlugins,omitempty"`
-	path            string
+	// Appearance is the palette the app draws with: system, dark or light.
+	Appearance string `json:"appearance,omitempty"`
+	// Language is what the app's words read in: system, en or zh-CN.
+	Language string `json:"language,omitempty"`
+	path     string
 }
 
 func (s *settings) save() {
@@ -773,18 +783,26 @@ func userDataDir(sub string) string {
 	return filepath.Join(dir, sub)
 }
 
-// i18nReady speaks what the system speaks, for the plugins' translations.
-func i18nReady() {
-	lang := i18n.English
-	for _, l := range mygo.App.PreferredLanguages() {
-		if strings.HasPrefix(l, "zh") {
-			lang = i18n.Chinese
-			break
-		}
-		if strings.HasPrefix(l, "en") {
-			lang = i18n.English
-			break
-		}
+// setLanguage speaks what the settings choose, or, for system, what the
+// system prefers — the plugins' translations and the app's own words alike.
+func (a *app) setLanguage() {
+	i18n.SetLanguage(i18n.Resolve(a.settings.Language, mygo.App.PreferredLanguages()))
+}
+
+// rethemeWindows redraws every window, for a change of appearance or
+// language: each picks the palette and the words up as it draws again.
+func (a *app) rethemeWindows() {
+	a.applyPalette()
+	if a.win != nil {
+		a.win.Invalidate()
 	}
-	i18n.SetLanguage(lang)
+	if a.settingsWin != nil {
+		a.settingsWin.Invalidate()
+	}
+	if a.pipWin != nil {
+		a.pipWin.Invalidate()
+	}
+	if a.deviceWin != nil {
+		a.deviceWin.Invalidate()
+	}
 }

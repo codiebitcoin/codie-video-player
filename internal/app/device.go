@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"codie-video-player/internal/codieout"
+	"codie-video-player/internal/i18n"
 )
 
 // The codie device: pairing over its signed local API, and the probe that
@@ -72,7 +73,7 @@ func (a *app) openDeviceWindow() {
 		return
 	}
 	a.deviceWin = mygo.NewWindow(mygo.WindowOptions{
-		Title:           "Codie 设备",
+		Title:           i18n.T("Codie Device"),
 		Width:           720,
 		Height:          560,
 		MinWidth:        560,
@@ -86,8 +87,10 @@ func (a *app) openDeviceWindow() {
 // deviceView is the 设备 window: pairing while there's no device, and once
 // there is one, how it is and what it says it can do.
 func (a *app) deviceView(c *ui.Context) {
+	a.applyPalette()
 	t := *c.Theme()
-	t.Dark = true
+	t.Dark = colors.Dark
+	t.Accent, t.AccentHover, t.AccentPressed = colors.accent, colors.accent, colors.accent
 	c.SetTheme(&t)
 	c.Root().Background(colors.bg)
 	ui.Scroll(c.Key("device")).Fill().Padding(24, 28, 28, 28).Children(func() {
@@ -103,8 +106,8 @@ func (a *app) deviceView(c *ui.Context) {
 // screen shows.
 func (a *app) pairingView(c *ui.Context) {
 	ui.Column(c).Gap(14).Children(func() {
-		ui.Text(c, "连接 codie 设备").FontSize(20).FontWeight(800)
-		ui.Text(c, "设备和电脑连同一个局域网，在设备上找到它的 IP（设置里看），填在下面。配对时设备屏幕会弹出 6 位配对码。").FontSize(13).TextColor(colors.muted).LineHeight(1.5)
+		ui.Text(c, i18n.T("Connect a codie device")).FontSize(20).FontWeight(800)
+		ui.Text(c, i18n.T("Put the device and this computer on the same network, find the device’s IP (it shows in its settings), and fill it in below. When pairing starts, the device’s screen shows a 6-digit code.")).FontSize(13).TextColor(colors.muted).LineHeight(1.5)
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Margin(6, 0, 0, 0).Children(func() {
 			ui.Box(c).Grow(1).Children(func() {
 				field := ui.Row(c.Key("addr-field")).Height(34).Radius(8).AlignItems(ui.Stretch)
@@ -115,12 +118,12 @@ func (a *app) pairingView(c *ui.Context) {
 				}
 				field.Children(func() {
 					ui.TextInputBase(c.Key("addr"), &a.pair.addr).Bind(&a.pairAddrBox).Grow(1).MinWidth(0).
-						PaddingX(10).Placeholder("设备的 IP，如 192.168.1.20").FontSize(13).Label("设备地址")
+						PaddingX(10).Placeholder(i18n.T("Device IP, e.g. 192.168.1.20")).FontSize(13).Label(i18n.T("Device address"))
 				})
 			})
-			nextLabel := "重新发码"
+			nextLabel := i18n.T("Send Again")
 			if a.pair.challenge == "" {
-				nextLabel = "下一步"
+				nextLabel = i18n.T("Next")
 			}
 			if ui.Button(c.Key("next"), nextLabel).Clicked() {
 				a.deviceRequestPair()
@@ -137,14 +140,14 @@ func (a *app) pairingView(c *ui.Context) {
 					}
 					field.Children(func() {
 						ui.TextInputBase(c.Key("code"), &a.pair.code).Bind(&a.pairCodeBox).Grow(1).MinWidth(0).
-							PaddingX(10).Placeholder("6 位配对码").FontSize(13).Label("配对码")
+							PaddingX(10).Placeholder(i18n.T("6-digit code")).FontSize(13).Label(i18n.T("Pairing code"))
 					})
 				})
-				if ui.Button(c.Key("confirm"), "确认配对").Clicked() {
+				if ui.Button(c.Key("confirm"), i18n.T("Confirm Pairing")).Clicked() {
 					a.deviceConfirmPair()
 				}
 			})
-			ui.Text(c, "设备屏幕上显示的 6 位码，5 分钟内有效。").FontSize(12).TextColor(colors.faint)
+			ui.Text(c, i18n.T("The 6-digit code on the device’s screen, good for 5 minutes.")).FontSize(12).TextColor(colors.faint)
 		}
 		if a.pair.busy != "" {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -162,8 +165,8 @@ func (a *app) pairingView(c *ui.Context) {
 func (a *app) pairedView(c *ui.Context) {
 	ui.Column(c).Gap(14).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "已连接 codie 设备").FontSize(20).FontWeight(800).Grow(1)
-			if ui.Button(c.Key("forget"), "解除配对").Clicked() {
+			ui.Text(c, i18n.T("codie device connected")).FontSize(20).FontWeight(800).Grow(1)
+			if ui.Button(c.Key("forget"), i18n.T("Forget Device")).Clicked() {
 				a.deviceForget()
 			}
 		})
@@ -171,18 +174,18 @@ func (a *app) pairedView(c *ui.Context) {
 			ui.Text(c, a.deviceNote).FontSize(13).TextColor(colors.muted)
 		}
 		ui.Row(c).Gap(10).Children(func() {
-			probeLabel := "探测设备能力"
+			probeLabel := i18n.T("Probe Device Capabilities")
 			if a.probing {
-				probeLabel = "探测中…"
+				probeLabel = i18n.T("Probing…")
 			}
 			if ui.Button(c.Key("probe"), probeLabel).Clicked() && !a.probing {
 				a.deviceProbe()
 			}
 		})
-		ui.Text(c, "探测会问设备每一个可能的媒体端点——它自己报上来的能力（media/capabilities）就是这台固件能不能放视频的答案。").FontSize(12.5).TextColor(colors.faint).LineHeight(1.5)
+		ui.Text(c, i18n.T("The probe asks the device every media endpoint it might have — what it reports (media/capabilities) is whether this firmware can play video.")).FontSize(12.5).TextColor(colors.faint).LineHeight(1.5)
 		if len(a.mediaProbe) > 0 {
 			ui.Row(c).Margin(8, 0, 0, 0).Children(func() {
-				ui.Text(c, "实测:媒体会话").FontSize(15).FontWeight(700)
+				ui.Text(c, i18n.T("Live test: media sessions")).FontSize(15).FontWeight(700)
 			})
 			ui.Column(c).Gap(6).Children(func() {
 				for i := range a.mediaProbe {
@@ -239,11 +242,11 @@ func (a *app) pairedView(c *ui.Context) {
 func (a *app) deviceRequestPair() {
 	addr := codieout.NormalizeAddr(a.pair.addr)
 	if addr == "" {
-		a.pair.err = "先填设备的 IP"
+		a.pair.err = i18n.T("Fill in the device’s IP first")
 		return
 	}
 	a.pair.addr = addr
-	a.pair.busy, a.pair.err = "正在找设备…", ""
+	a.pair.busy, a.pair.err = i18n.T("Looking for the device…"), ""
 	go func() {
 		if err := codieout.Dial(addr); err != nil {
 			a.post(func() { a.pair.busy, a.pair.err = "", err.Error() })
@@ -266,10 +269,10 @@ func (a *app) deviceRequestPair() {
 // device what it can do.
 func (a *app) deviceConfirmPair() {
 	if a.pair.challenge == "" || len(a.pair.code) != 6 {
-		a.pair.err = "先填设备上显示的 6 位配对码"
+		a.pair.err = i18n.T("Fill in the 6-digit code the device shows first")
 		return
 	}
-	a.pair.busy, a.pair.err = "正在配对…", ""
+	a.pair.busy, a.pair.err = i18n.T("Pairing…"), ""
 	addr := a.pair.addr
 	challenge, code := a.pair.challenge, a.pair.code
 	go func() {
@@ -301,14 +304,14 @@ func (a *app) deviceProbe() {
 		sessions := client.TryMediaSessions()
 		note := ""
 		if st, err := client.Status(); err == nil {
-			note = "地址 " + client.Creds.Addr
+			note = i18n.T("Address") + " " + client.Creds.Addr
 			if st.CardLoaded {
-				note += " · TF 卡就绪"
+				note += " · " + i18n.T("TF card ready")
 			} else {
-				note += " · TF 卡未挂载（视频播放不需要 TF 卡）"
+				note += " · " + i18n.T("TF card not mounted (video doesn’t need it)")
 			}
 		} else {
-			note = "设备状态问不动：" + err.Error()
+			note = i18n.T("Couldn’t ask the device’s state") + ": " + err.Error()
 		}
 		a.post(func() {
 			a.probing = false
