@@ -7,6 +7,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,8 +144,12 @@ func Run(bundledPlugins embed.FS) error {
 		// Closing the window hides it: what plays goes on, and the Dock's
 		// or another launch's brings it back.
 		a.win.OnClose(func(e *mygo.CloseEvent) {
+			log.Printf("lifecycle: window close event")
 			e.PreventDefault()
 			a.win.Hide()
+		})
+		mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
+			log.Printf("lifecycle: before-quit")
 		})
 	})
 	mygo.App.OnActivate(func(bool) {
@@ -216,6 +221,9 @@ func (a *app) useSource(id string) {
 	a.detail = nil
 	a.searching = false
 	a.query = ""
+	a.tabID = ""
+	a.tabs, a.tabsLoading = nil, false
+	a.clearGrid()
 	a.loadTabs()
 	a.loadTab()
 }
@@ -259,6 +267,7 @@ func (a *app) loadTabs() {
 			a.tabs = tabs
 			if len(tabs) > 0 && !a.hasTab(a.tabID) {
 				a.tabID = tabs[0].ID
+				a.loadTab()
 			}
 		})
 	}()
@@ -301,6 +310,11 @@ func (a *app) loadTab() {
 func (a *app) loadMore() {
 	src := a.sourceEntry
 	if src == nil || a.gridLoading || a.searching {
+		return
+	}
+	// The chips are on their way: the first load goes out under their first
+	// name, not under the last source's tab or nothing at all.
+	if a.tabID == "" && src.src.Can("videoTabs") {
 		return
 	}
 	next := a.gridPage + 1
@@ -396,6 +410,25 @@ func (a *app) playEpisode(item video.Item, ep video.Episode, at int) {
 	if src == nil {
 		return
 	}
+	// 在 codie 上播放:取流后交给设备的媒体会话。
+	if a.deviceOutput && a.codie != nil {
+		go func() {
+			log.Printf("codie play: resolving %s / %s", item.ID, ep.ID)
+			s, err := src.src.Play(item.ID, ep.ID)
+			if err != nil {
+				log.Printf("codie play: resolve failed: %v", err)
+				a.post(func() {
+					a.page = pagePlay
+					a.playing = playing{item: item, ep: ep, at: at}
+					a.playerErr = videoProblem(err, "这一集放不了")
+				})
+				return
+			}
+			log.Printf("codie play: resolved (%s, audio=%v)", s.Type, s.AudioURL != "")
+			a.post(func() { a.playEpisodeOnDevice(item, ep, at, s) })
+		}()
+		return
+	}
 	a.stopPlayer()
 	a.playerErr = ""
 	a.playing = playing{item: item, ep: ep, at: at}
@@ -440,8 +473,9 @@ func (a *app) nextEpisode(back bool) {
 	a.playEpisode(d.Item, d.Episodes[at], at)
 }
 
-// stopPlayer ends what plays, and its file.
+// stopPlayer ends what plays, and its file — here or on the device.
 func (a *app) stopPlayer() {
+	a.stopPlayerForCodie()
 	p, file := a.player, a.playerFile
 	a.player, a.playerFile = nil, ""
 	if p != nil {

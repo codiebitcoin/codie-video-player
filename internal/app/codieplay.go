@@ -2,13 +2,15 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"time"
-
-	"log"
 
 	"codie-video-player/internal/codieout"
 	"codie-video-player/internal/video"
@@ -39,7 +41,9 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 	a.codieBusy = "正在为设备转码…"
 	
 
+	log.Printf("codie play: transcoding started")
 	dst, err := a.codieMakeMP4(s)
+	log.Printf("codie play: transcode done (err=%v)", err)
 	if err != nil {
 		a.post(func() {
 			a.codieBusy = ""
@@ -61,6 +65,7 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 		ConflictPolicy: "replace",
 	}
 	session, err := a.codie.CreateMediaSession(dst, req)
+	log.Printf("codie play: session=%q err=%v", session, err)
 	a.post(func() {
 		a.codieBusy = ""
 		if err != nil {
@@ -75,7 +80,9 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 
 // codieMakeMP4 turns what the source gave into one MP4 of the shape the
 // device takes: H.264 with AAC, no wider than 1080p, its headers on every
-// input, two inputs when the picture and the sound come apart.
+// input, two inputs when the picture and the sound come apart. Streams that
+// are already in that shape go through a plain copy, which takes seconds;
+// the rest are transcoded, which takes minutes.
 func (a *app) codieMakeMP4(s *video.Stream) (string, error) {
 	ffmpeg := findFFmpeg()
 	if ffmpeg == "" {
@@ -87,12 +94,15 @@ func (a *app) codieMakeMP4(s *video.Stream) (string, error) {
 	}
 	dst := f.Name()
 	f.Close()
-	args := []string{"-hide_banner", "-loglevel", "error", "-y"}
+	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}
 	hdr := ffmpegHeaders(s.Headers)
 	input := func(url string) {
 		if hdr != "" {
 			args = append(args, "-headers", hdr)
 		}
+		// A CDN read that stalls would hang the whole pass otherwise.
+		args = append(args, "-reconnect", "1", "-reconnect_streamed", "1",
+			"-reconnect_delay_max", "5", "-rw_timeout", "15000000")
 		args = append(args, "-i", url)
 	}
 	input(s.URL)
@@ -102,22 +112,139 @@ func (a *app) codieMakeMP4(s *video.Stream) (string, error) {
 	} else {
 		args = append(args, "-map", "0:v:0?", "-map", "0:a:0?")
 	}
-	args = append(args,
-		"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-		"-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2",
-		"-c:a", "aac", "-b:a", "160k",
-		"-movflags", "+faststart", dst)
+	if probePlayableAsIs(s) {
+		log.Printf("codie play: streams already in device shape; copying")
+		args = append(args, "-c", "copy")
+	} else {
+		log.Printf("codie play: streams need transcoding")
+		args = append(args,
+			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+			"-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2",
+			"-c:a", "aac", "-b:a", "160k")
+	}
+	args = append(args, "-movflags", "+faststart", "-progress", "pipe:1", dst)
 	ctx, cancel := context.WithTimeout(context.Background(), codieFFmpegTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffmpeg, args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := cmd.StdoutPipe()
+	if err != nil {
 		os.Remove(dst)
-		if ctx.Err() != nil {
-			return "", errors.New("这一集转码超时了,请重试")
+		return "", err
+	}
+	cmd.Stderr = cmd.Stdout
+	if err := cmd.Start(); err != nil {
+		os.Remove(dst)
+		return "", err
+	}
+	// ffmpeg 报告自己的进度:每一行 out_time_us=微秒。
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	reader := make([]byte, 0, 0)
+	buf := make([]byte, 4<<10)
+	var lastUS int64 = -1
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+readLoop:
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				os.Remove(dst)
+				if ctx.Err() != nil {
+					return "", errors.New("这一集转码超时了,请重试")
+				}
+				return "", fmt.Errorf("%s", tailLine(append(reader, buf...)))
+			}
+			break readLoop
+		case <-ticker.C:
+			if lastUS >= 0 && s.Type != "" {
+				a.post(func() {
+					if a.codieBusy != "" {
+						a.codieBusy = fmt.Sprintf("正在为设备转码… %d%%", percentOf(lastUS))
+					}
+				})
+			}
+		default:
+			n, rerr := out.Read(buf)
+			if n > 0 {
+				reader = append(reader, buf[:n]...)
+				for _, line := range strings.Split(string(buf[:n]), "\n") {
+					if us, ok := strings.CutPrefix(line, "out_time_us="); ok {
+						if v, e := strconv.ParseInt(strings.TrimSpace(us), 10, 64); e == nil {
+							lastUS = v
+						}
+					}
+				}
+			}
+			if rerr != nil {
+				<-done
+				os.Remove(dst)
+				if ctx.Err() != nil {
+					return "", errors.New("这一集转码超时了,请重试")
+				}
+				return "", fmt.Errorf("%s", tailLine(reader))
+			}
 		}
-		return "", fmt.Errorf("%s", tailLine(out))
 	}
 	return dst, nil
+}
+
+// percentOf is how far a microsecond count is into a normal episode, for the
+// busy line; a source that knows its duration replaces this with the real one.
+func percentOf(us int64) int {
+	p := int(us / 1e6 / 240 * 100) // 以 4 分钟一集估
+	if p > 99 {
+		p = 99
+	}
+	return p
+}
+
+// probePlayableAsIs asks ffprobe whether the stream already plays as the
+// device takes it: H.264 with AAC, no bigger than 1080p.
+func probePlayableAsIs(s *video.Stream) bool {
+	ffprobe := findFFprobe()
+	if ffprobe == "" {
+		return false // 不知道,就当要转
+	}
+	for _, url := range []string{s.URL, s.AudioURL} {
+		if url == "" {
+			continue
+		}
+		out, err := exec.Command(ffprobe, "-v", "error",
+			"-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height",
+			"-of", "json", url).Output()
+		if err != nil {
+			return false
+		}
+		var v struct {
+			Streams []struct {
+				CodecName string `json:"codec_name"`
+				Width     int    `json:"width"`
+				Height    int    `json:"height"`
+			} `json:"streams"`
+		}
+		if json.Unmarshal(out, &v) != nil || len(v.Streams) == 0 {
+			return false
+		}
+		st := v.Streams[0]
+		if st.CodecName != "h264" || st.Width > 1920 || st.Height > 1080 {
+			return false
+		}
+	}
+	return true
+}
+
+// findFFprobe finds ffprobe beside ffmpeg.
+func findFFprobe() string {
+	if p, err := exec.LookPath("ffprobe"); err == nil {
+		return p
+	}
+	for _, p := range []string{"/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
 }
 
 // codiePoll asks the device what the session is doing, until it's over.

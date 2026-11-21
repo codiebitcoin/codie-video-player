@@ -37,7 +37,13 @@ func init() {
 				mygo.RunOnMain(func() { fn(); a.win.Invalidate() })
 			}
 			step(4*time.Second, func() {
-				logf("sources: %d, grid: %d items, device paired: %v", len(a.sources), len(a.items), a.codie != nil)
+				if src := os.Getenv("MM_PLAY_SOURCE"); src != "" {
+					a.useSource(src)
+				}
+			})
+			step(1*time.Second, func() {
+				logf("sources: %d (%s), active: %s, grid: %d items, device paired: %v",
+					len(a.sources), sourceNames(a.sources), a.sourceName(), len(a.items), a.codie != nil)
 			})
 			// 站点连不上时,退而测设备本身:本地生成的测试 MP4 开会话。
 			fallback := func() {
@@ -71,7 +77,7 @@ func init() {
 			for i := 0; i < 20; i++ {
 				time.Sleep(2 * time.Second)
 				mygo.RunOnMain(func() {
-					logf("grid: %d items", len(a.items))
+					logf("grid: %d items, err=%q, loading=%v, tab=%q", len(a.items), a.gridErr, a.gridLoading, a.tabID)
 					if len(a.items) > 0 && a.detail == nil {
 						a.openDetail(a.items[0])
 					}
@@ -92,17 +98,22 @@ func init() {
 					break
 				}
 			}
-			if len(a.items) == 0 {
-				fallback()
-			}
 			step(0, func() {
-				a.deviceOutput = true
 				if d := a.detail; d != nil && len(d.Episodes) > 0 {
-					logf("playing %q episode %q on the device", d.Title, d.Episodes[0].Title)
+					logf("playing locally first: %q episode %q", d.Title, d.Episodes[0].Title)
 					a.playEpisode(d.Item, d.Episodes[0], 0)
-				} else {
-					logf("no episodes to play; a local test MP4 may already be on the device")
+				} else if len(a.items) == 0 {
+					logf("no grid; falling back to a local test MP4 on the device")
+					fallback()
 				}
+			})
+			// 本机放 12 秒后,模拟用户点 [codie] 切换。
+			time.Sleep(12 * time.Second)
+			step(0, func() {
+				logf("toggling to codie: before toggle deviceOutput=%v codie=%v item=%q",
+					a.deviceOutput, a.codie != nil, a.playing.item.ID)
+				a.codieToggle(true)
+				logf("after toggle: deviceOutput=%v err=%q busy=%q", a.deviceOutput, a.playerErr, a.codieBusy)
 			})
 			for i := 1; i <= 150; i++ {
 				time.Sleep(time.Second)

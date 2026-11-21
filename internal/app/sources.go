@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"codie-video-player/internal/video"
 )
@@ -57,4 +58,21 @@ func mustSub(fsys embed.FS, dir string) fs.FS {
 		panic(err)
 	}
 	return sub
+}
+
+// sourceNames is the sources' ids in order, for logs.
+func sourceNames(entries []sourceEntry) string {
+	names := make([]string, 0, len(entries))
+	for i := range entries {
+		names = append(names, entries[i].id)
+	}
+	return strings.Join(names, ",")
+}
+
+// sourceName is the showing source's id.
+func (a *app) sourceName() string {
+	if a.sourceEntry == nil {
+		return ""
+	}
+	return a.sourceEntry.id
 }
