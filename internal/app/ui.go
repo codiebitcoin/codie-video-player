@@ -39,6 +39,7 @@ const topBarHeight = 40
 func (a *app) view(c *ui.Context) {
 	t := *c.Theme()
 	t.Dark = true
+	t.Accent, t.AccentHover, t.AccentPressed = colors.accent, colors.accent, colors.accent
 	c.SetTheme(&t)
 	root := c.Root()
 	root.Background(colors.bg)
@@ -306,9 +307,12 @@ func (a *app) searchView(c *ui.Context) {
 		})
 	}
 	items := a.searchItems()
+	probs := a.searchProblems()
 	switch {
 	case a.gridLoading && len(a.searchGroups) == 0:
 		a.loading(c)
+	case len(items) == 0 && probs != "" && a.countSearchHits() == 0:
+		a.centered(c, probs, "再试一次", func() { a.searchAll(a.query) })
 	case len(items) == 0 && len(a.searchGroups) > 0:
 		a.centered(c, "没找到「"+a.query+"」", "", nil)
 	case len(items) == 0:
@@ -319,10 +323,26 @@ func (a *app) searchView(c *ui.Context) {
 				a.card(c.Key("s"+items[i].ID+":"+strconv.Itoa(i)), &items[i])
 			}
 		})
-		if probs := a.searchProblems(); probs != "" {
+		if a.gridLoading {
+			ui.Row(c).Center().Padding(14, 0, 0, 0).Children(func() {
+				ui.Spinner(c).Size(16, 16)
+			})
+		}
+		if probs != "" {
 			ui.Text(c, probs).FontSize(12).TextColor(colors.faint).Padding(14, 0, 0, 0)
 		}
 	}
+}
+
+// countSearchHits is how many sources came back with something.
+func (a *app) countSearchHits() int {
+	n := 0
+	for _, g := range a.searchGroups {
+		if len(g.items) > 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // searchChip is one source's part of a search's answers, raised when chosen.
@@ -473,10 +493,14 @@ func (a *app) grid(c *ui.Context) {
 	switch {
 	case a.gridErr != "" && len(a.items) == 0:
 		a.gridError(c, a.gridErr)
-	case a.gridLoading && len(a.items) == 0:
+	case a.tabsErr != "" && len(a.items) == 0:
+		a.gridError(c, a.tabsErr)
+	case (a.gridLoading || a.tabsLoading) && len(a.items) == 0:
 		a.skeleton(c)
-	case len(a.items) == 0:
+	case len(a.items) == 0 && a.tabID != "":
 		a.centered(c, "这里还没有内容", "", nil)
+	case len(a.items) == 0:
+		a.skeleton(c)
 	default:
 		a.cards(c)
 		if a.gridLoading {
@@ -501,6 +525,7 @@ func (a *app) gridError(c *ui.Context, msg string) {
 		ui.Text(c, msg).TextColor(colors.muted).FontSize(13).TextAlign(ui.Center).MaxWidth(520)
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 			if ui.Button(c.Key("retry"), "重试").Clicked() {
+				a.loadTabs()
 				a.loadTab()
 			}
 			for i := range a.sources {
@@ -625,9 +650,12 @@ func (a *app) detailView(c *ui.Context) {
 				grad := ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0)
 				grad.Draw(func(p *ui.Painter, r ui.Rect) {
 					p.FillGradient(r, ui.LinearGradient{
-						From:  ui.RGBA(20, 20, 22, 0.35),
-						To:    colors.bg,
 						Angle: 180,
+						Stops: []ui.GradientStop{
+							{Color: ui.RGBA(20, 20, 22, 0.28), At: 0},
+							{Color: ui.RGBA(20, 20, 22, 0.55), At: 0.55},
+							{Color: colors.bg, At: 1},
+						},
 					}, 0)
 				})
 			})
@@ -891,9 +919,7 @@ func (a *app) stageContent(c *ui.Context, playing playing) {
 		switch {
 		case player != nil:
 			ui.Video(c, player).Fill().Fit(ui.Contain)
-			if !player.Ready() {
-				a.opening(c)
-			} else if player.Buffering() {
+			if player.Ready() && player.Buffering() {
 				ui.Row(c).Absolute().Top(12).Right(14).Children(func() {
 					ui.Spinner(c).Size(16, 16).TextColor(ui.RGBA(255, 255, 255, 0.6))
 				})
@@ -905,10 +931,29 @@ func (a *app) stageContent(c *ui.Context, playing playing) {
 					a.playEpisode(playing.item, playing.ep, playing.at)
 				}
 			})
-		default:
-			a.opening(c)
 		}
 	}
+	// While the episode opens, its spinner floats centered over the stage,
+	// wherever the video element sits.
+	if opening, _ := a.openingState(); opening {
+		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Children(func() {
+			ui.Column(c).Fill().Justify(ui.Center).AlignItems(ui.Center).Children(func() {
+				a.opening(c)
+			})
+		})
+	}
+}
+
+// openingState reports whether the stage is still waiting for its episode,
+// and whether anything at all is on it.
+func (a *app) openingState() (bool, bool) {
+	if a.pipActive() || (a.deviceOutput && a.codie != nil) || a.playerErr != "" {
+		return false, false
+	}
+	if p := a.player; p != nil {
+		return !p.Ready(), true
+	}
+	return true, false
 }
 
 // playOverlays is what floats over the stage: the countdown to the next

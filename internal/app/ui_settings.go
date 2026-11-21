@@ -40,6 +40,7 @@ func (a *app) openSettingsWindow() {
 func (a *app) settingsContent(c *ui.Context) {
 	t := *c.Theme()
 	t.Dark = true
+	t.Accent, t.AccentHover, t.AccentPressed = colors.accent, colors.accent, colors.accent
 	c.SetTheme(&t)
 	c.Root().Background(colors.bg)
 

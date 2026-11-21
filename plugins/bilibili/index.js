@@ -1453,7 +1453,15 @@ export async function stream({ id, quality }) {
 
 // How long a video runs, as a card says it.
 function mmss(s) {
-  s = Math.floor(s || 0);
+  // The search's answers say "5:30" in words, the video's own says seconds:
+  // both come in, and what makes no sense comes out as nothing at all.
+  if (typeof s === "string" && s) s = seconds(s) / 1000;
+  s = Math.floor(Number(s) || 0);
+  if (!isFinite(s) || s <= 0) return "";
+  if (s >= 3600) {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    return h + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
+  }
   return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
 }
 
@@ -1466,7 +1474,7 @@ export async function videoSearch({ query: q, offset }) {
       id: r.bvid,
       title: clean(r.title),
       cover: image(r.pic),
-      subtitle: `${clean(r.author)} · ${mmss(r.duration)}`,
+      subtitle: [clean(r.author), mmss(r.duration)].filter(Boolean).join(" · "),
     })),
     more,
   };
@@ -1558,7 +1566,7 @@ export async function videoList({ tab, page }) {
     id: r.bvid,
     title: clean(r.title),
     cover: image(r.pic),
-    subtitle: `${clean(r.owner?.name || r.author || "")} · ${mmss(r.duration)}`,
+    subtitle: [clean(r.owner?.name || r.author || ""), mmss(r.duration)].filter(Boolean).join(" · "),
   });
   if (tab === "hot") {
     const d = await get("/x/web-interface/popular", { ps: 20, pn: n });

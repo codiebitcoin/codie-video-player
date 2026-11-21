@@ -41,6 +41,7 @@ type app struct {
 	tabID       string
 	tabs        []video.Tab
 	tabsLoading bool
+	tabsErr     string // the source gave no chips at all, and why
 	query       string // what's in the search field
 	searchBox   ui.Handle
 	searching   bool // the grid shows what a search found
@@ -100,7 +101,8 @@ type app struct {
 	updateURL     string
 	updateChecking bool
 
-	saveTmr *time.Timer // the settings' write, once the changes settle
+	saveTmr  *time.Timer // the settings' write, once the changes settle
+	quitting bool       // a real quit is on: the window closes instead of hiding
 
 	// 在 codie 上播放:转好的 MP4 开成设备的媒体会话,画面落在它的屏幕上。
 	deviceOutput bool
@@ -199,14 +201,20 @@ func Run(bundledPlugins embed.FS) error {
 			shotHook(a)
 		}
 		// Closing the window hides it: what plays goes on, and the Dock's
-		// or another launch's brings it back.
+		// or another launch's brings it back. A real quit — the tray's, the
+		// Dock's — lets the window close, which the quit needs to finish.
 		a.win.OnClose(func(e *mygo.CloseEvent) {
 			log.Printf("lifecycle: window close event")
+			if a.quitting {
+				return
+			}
 			e.PreventDefault()
 			a.win.Hide()
 		})
 		mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
 			log.Printf("lifecycle: before-quit")
+			a.quitting = true
+			a.recordPlayProgress()
 		})
 	})
 	mygo.App.OnActivate(func(bool) {
@@ -304,11 +312,14 @@ func (a *app) grantSource(id string) {
 
 // ---- the tabs and the grid ----
 
-// loadTabs asks the source what its chips are.
+// loadTabs asks the source what its chips are. A source answers the chips it
+// can even when it couldn't ask the site for all of them — its own ranks
+// come anyway — so what came back always shows; only nothing at all is an
+// error worth owning.
 func (a *app) loadTabs() {
 	src := a.sourceEntry
 	if src == nil || !src.src.Can("videoTabs") {
-		a.tabs, a.tabsLoading = nil, false
+		a.tabs, a.tabsLoading, a.tabsErr = nil, false, ""
 		a.tabID = ""
 		return
 	}
@@ -316,17 +327,21 @@ func (a *app) loadTabs() {
 		return
 	}
 	a.tabsLoading = true
+	a.tabsErr = ""
 	go func() {
 		tabs, err := src.src.Tabs()
 		a.post(func() {
 			a.tabsLoading = false
-			if err != nil {
+			if len(tabs) > 0 {
+				a.tabs = tabs
+				if !a.hasTab(a.tabID) {
+					a.tabID = tabs[0].ID
+					a.loadTab()
+				}
 				return
 			}
-			a.tabs = tabs
-			if len(tabs) > 0 && !a.hasTab(a.tabID) {
-				a.tabID = tabs[0].ID
-				a.loadTab()
+			if err != nil {
+				a.tabsErr = videoProblem(err, "这个源的分类没加载出来")
 			}
 		})
 	}()
@@ -370,7 +385,7 @@ func (a *app) loadTab() {
 // source's own counting: pages from one.
 func (a *app) loadMore() {
 	src := a.sourceEntry
-	if src == nil || a.gridLoading || a.searching {
+	if src == nil || a.gridLoading || a.searching || a.tabsErr != "" {
 		return
 	}
 	// The chips are on their way: the first load goes out under their first
@@ -734,12 +749,9 @@ func (s *settings) save() {
 
 func loadSettings() *settings {
 	s := &settings{}
-	dir, err := mygo.App.Path(mygo.PathUserData)
-	if err == nil {
-		s.path = filepath.Join(dir, "settings.json")
-		if b, err := os.ReadFile(s.path); err == nil {
-			json.Unmarshal(b, s)
-		}
+	s.path = filepath.Join(userDataDir(""), "settings.json")
+	if b, err := os.ReadFile(s.path); err == nil {
+		json.Unmarshal(b, s)
 	}
 	return s
 }
@@ -747,9 +759,15 @@ func loadSettings() *settings {
 // pluginsDir is where plugins are dropped in.
 func pluginsDir() string { return userDataDir("plugins") }
 
+// userDataDir is where the app keeps its own: redirected to a folder of its
+// own when the run exists only to be looked at.
 func userDataDir(sub string) string {
-	dir, err := mygo.App.Path(mygo.PathUserData)
-	if err != nil {
+	dir := ""
+	if shotsMode {
+		dir = filepath.Join(os.TempDir(), "codie-video-player-shots")
+	} else if d, err := mygo.App.Path(mygo.PathUserData); err == nil {
+		dir = d
+	} else {
 		dir = filepath.Join(os.TempDir(), "codie-video-player")
 	}
 	return filepath.Join(dir, sub)

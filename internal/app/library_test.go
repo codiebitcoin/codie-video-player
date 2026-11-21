@@ -44,17 +44,20 @@ func TestWatchRecordsAndResumes(t *testing.T) {
 
 func TestWatchCapsTheHistory(t *testing.T) {
 	// The history keeps at most historyCap dramas, dropping the oldest.
+	id := func(i int) string {
+		return item(string(rune('a'+i%26)) + string(rune('a'+i/26))).ID
+	}
 	l := testLibrary(t)
 	for i := 0; i < historyCap+10; i++ {
-		l.watch(item("d"+string(rune('a'+i%26))+string(rune('a'+i/26))), video.Episode{ID: "e"}, 0, 0, 0, false)
+		l.watch(item(id(i)), video.Episode{ID: "e"}, 0, 0, 0, false)
 	}
 	if len(l.History) != historyCap {
 		t.Fatalf("history wasn't capped: %d", len(l.History))
 	}
-	if l.progressOf("daa") != nil {
+	if l.progressOf(id(0)) != nil {
 		t.Fatalf("the oldest didn't drop out of the capped history")
 	}
-	if l.progressOf("dap") == nil {
+	if l.progressOf(id(15)) == nil {
 		t.Fatalf("one within the cap went away")
 	}
 }

@@ -76,6 +76,7 @@ func (a *app) closePip() {
 func (a *app) pipContent(c *ui.Context) {
 	t := *c.Theme()
 	t.Dark = true
+	t.Accent, t.AccentHover, t.AccentPressed = colors.accent, colors.accent, colors.accent
 	c.SetTheme(&t)
 	c.Root().Background(ui.RGB(0, 0, 0))
 
