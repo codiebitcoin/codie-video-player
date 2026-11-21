@@ -61,6 +61,13 @@ type app struct {
 	scrub      scrubState
 	vol        float64
 
+	// 在 codie 上播放:转好的 MP4 开成设备的媒体会话,画面落在它的屏幕上。
+	deviceOutput bool
+	codieSession string
+	codieFile    string
+	codieState   *codieout.MediaSessionState
+	codieBusy    string
+
 	covers *coverCache
 
 	settings *settings
@@ -132,6 +139,24 @@ func Run(bundledPlugins embed.FS) error {
 		a.loadTab()
 		if shotHook != nil {
 			shotHook(a)
+		}
+		// Closing the window hides it: what plays goes on, and the Dock's
+		// or another launch's brings it back.
+		a.win.OnClose(func(e *mygo.CloseEvent) {
+			e.PreventDefault()
+			a.win.Hide()
+		})
+	})
+	mygo.App.OnActivate(func(bool) {
+		if a.win != nil {
+			a.win.Show()
+			a.win.Focus()
+		}
+	})
+	mygo.App.OnSecondInstance(func([]string, string) {
+		if a.win != nil {
+			a.win.Show()
+			a.win.Focus()
 		}
 	})
 	return mygo.App.Run()

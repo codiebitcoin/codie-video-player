@@ -398,22 +398,43 @@ func (a *app) playView(c *ui.Context) {
 	playing := a.playing
 	ui.Column(c).Fill().Children(func() {
 		ui.Box(c).Grow(1).MinHeight(0).Background(ui.RGB(0, 0, 0)).Center().Children(func() {
-			player := a.player
-			switch {
-			case player != nil:
-				ui.Video(c, player).Fill().Fit(ui.Contain)
-				if !player.Ready() {
-					a.opening(c)
-				}
-			case a.playerErr != "":
+			if a.deviceOutput && a.codie != nil {
+				// 画面在设备的屏幕上;这里只说状态。
 				ui.Column(c).Gap(12).Center().Children(func() {
-					ui.Text(c, a.playerErr).TextColor(ui.RGB(255, 255, 255)).FontSize(13).TextAlign(ui.Center).MaxWidth(420)
-					if ui.Button(c.Key("retry"), "重试").Clicked() {
-						a.playEpisode(playing.item, playing.ep, playing.at)
+					ui.Icon(c, iconFilm).Size(28, 28).TextColor(ui.RGBA(255, 255, 255, 0.35))
+					switch {
+					case a.playerErr != "":
+						ui.Text(c, a.playerErr).TextColor(ui.RGB(255, 255, 255)).FontSize(13).TextAlign(ui.Center).MaxWidth(420)
+						if ui.Button(c.Key("retry"), "重试").Clicked() {
+							a.playEpisode(playing.item, playing.ep, playing.at)
+						}
+					case a.codieBusy != "":
+						ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+							ui.Spinner(c).TextColor(ui.RGBA(255, 255, 255, 0.7))
+							ui.Text(c, a.codieBusy).FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.7))
+						})
+					default:
+						ui.Text(c, "画面在 codie 设备的屏幕上").FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.55))
 					}
 				})
-			default:
-				a.opening(c)
+			} else {
+				player := a.player
+				switch {
+				case player != nil:
+					ui.Video(c, player).Fill().Fit(ui.Contain)
+					if !player.Ready() {
+						a.opening(c)
+					}
+				case a.playerErr != "":
+					ui.Column(c).Gap(12).Center().Children(func() {
+						ui.Text(c, a.playerErr).TextColor(ui.RGB(255, 255, 255)).FontSize(13).TextAlign(ui.Center).MaxWidth(420)
+						if ui.Button(c.Key("retry"), "重试").Clicked() {
+							a.playEpisode(playing.item, playing.ep, playing.at)
+						}
+					})
+				default:
+					a.opening(c)
+				}
 			}
 		})
 		a.controls(c, playing)
@@ -438,8 +459,9 @@ func (a *app) controls(c *ui.Context, playing playing) {
 				ui.Text(c, playing.ep.Title).FontSize(12.5).TextColor(colors.muted).Shrink(0).SingleLine()
 			}
 		})
-		player := a.player
-		if player != nil && player.Ready() && player.Err() == nil {
+		if a.deviceOutput && a.codie != nil {
+			a.codieScrubber(c)
+		} else if player := a.player; player != nil && player.Ready() && player.Err() == nil {
 			a.scrubber(c, player)
 		}
 		ui.Row(c).Height(38).Gap(6).AlignItems(ui.Center).Children(func() {
@@ -449,7 +471,15 @@ func (a *app) controls(c *ui.Context, playing playing) {
 					a.nextEpisode(true)
 				}
 			}
-			if player != nil {
+			if a.deviceOutput && a.codie != nil {
+				icon := iconPlay
+				if a.codieState != nil && a.codieState.IsPlaying {
+					icon = iconPause
+				}
+				if b := iconButton(c.Key("play"), icon, 17, colors.text, "播放/暂停"); b.Clicked() {
+					a.codiePlayPause()
+				}
+			} else if player := a.player; player != nil {
 				icon := iconPlay
 				if player.Playing() {
 					icon = iconPause
@@ -470,9 +500,15 @@ func (a *app) controls(c *ui.Context, playing playing) {
 				}
 			}
 			ui.Spacer(c)
-			ui.Text(c, a.playedOf(player)).FontSize(11.5).TextColor(colors.muted)
-			a.volume(c, player)
+			if a.deviceOutput && a.codie != nil {
+				ui.Text(c, a.codiePlayedOf()).FontSize(11.5).TextColor(colors.muted)
+				a.codieVolumeControl(c)
+			} else if player := a.player; player != nil {
+				ui.Text(c, a.playedOf(player)).FontSize(11.5).TextColor(colors.muted)
+				a.volume(c, player)
+			}
 		})
+		a.outputToggle(c)
 	})
 }
 
@@ -564,6 +600,115 @@ func (a *app) volume(c *ui.Context, player *ui.VideoPlayer) {
 	sl := ui.Slider(c.Key("vol"), &a.vol, 0, 100).Width(90)
 	if sl.Changed() {
 		player.SetVolume(a.vol / 100)
+	}
+}
+
+// outputToggle is 本机 and codie, the two places an episode plays.
+func (a *app) outputToggle(c *ui.Context) {
+	if a.codie == nil {
+		return
+	}
+	ui.Row(c).Shrink(0).Gap(0).Padding(0, 0, 2, 0).Children(func() {
+		for _, o := range []struct {
+			label string
+			on    bool
+		}{{"本机", !a.deviceOutput}, {"codie", a.deviceOutput}} {
+			b := ui.ButtonBase(c.Key(o.label)).Height(26).PaddingX(12).Radius(999).Center().FocusRing(false).Label(o.label)
+			if o.on {
+				b.Background(colors.hover).TextColor(colors.text)
+			} else {
+				b.Background(ui.Transparent).TextColor(colors.faint)
+				if b.Hovered() {
+					b.Background(colors.hover)
+				}
+			}
+			b.Children(func() { ui.Text(c, o.label).FontSize(12.5).FontWeight(600) })
+			if b.Clicked() {
+				a.codieToggle(o.on)
+			}
+		}
+	})
+}
+
+// codieScrubber is how far the episode is on the device, which seeks there.
+func (a *app) codieScrubber(c *ui.Context) {
+	st := &a.scrub
+	pos, dur := a.codieTimes()
+	secs := dur.Seconds()
+	if !st.active && !st.held {
+		st.v = pos.Seconds()
+	}
+	s := ui.SliderBase(c, &st.v, 0, max(secs, 1)).Height(20).FocusRing(false).Label("进度").Cursor(ui.CursorPointer)
+	s.HandleInput(func(ev ui.InputEvent) bool {
+		switch ev.Kind {
+		case ui.InputPointerDown:
+			st.held = ev.Button == 0
+		case ui.InputPointerUp:
+			st.held = false
+		}
+		return false
+	})
+	switch {
+	case st.held:
+		st.active = true
+	case st.active:
+		st.active = false
+		a.codieSeek(int64(min(st.v, max(0, secs-1)) * float64(time.Second)))
+	case s.Changed():
+		a.codieSeek(int64(min(st.v, max(0, secs-1)) * float64(time.Second)))
+	}
+	at := st.v
+	if !st.active {
+		at = pos.Seconds()
+	}
+	frac := float32(0)
+	if secs > 0 {
+		frac = float32(min(1, max(0, at/secs)))
+	}
+	thick := float32(4)
+	if s.Hovered() || st.held {
+		thick = 6
+	}
+	thick = s.AnimateTo("thick", thick, ui.Snappy)
+	s.Draw(func(p *ui.Painter, r ui.Rect) {
+		y := r.Y + (r.H-thick)/2
+		p.Fill(ui.Rect{X: r.X, Y: y, W: r.W, H: thick}, colors.hairline, thick/2)
+		p.Fill(ui.Rect{X: r.X, Y: y, W: max(thick, r.W*frac), H: thick}, colors.accent, thick/2)
+	})
+}
+
+// codieTimes is how far and how long the episode is on the device.
+func (a *app) codieTimes() (time.Duration, time.Duration) {
+	if st := a.codieState; st != nil {
+		return time.Duration(st.PositionMS) * time.Millisecond, time.Duration(st.DurationMS) * time.Millisecond
+	}
+	return 0, 0
+}
+
+// codiePlayedOf is the device episode's time, as the controls say it.
+func (a *app) codiePlayedOf() string {
+	pos, dur := a.codieTimes()
+	if dur <= 0 {
+		return ""
+	}
+	return clock(pos) + " / " + clock(dur)
+}
+
+// codieVolumeControl is how loud the device plays.
+func (a *app) codieVolumeControl(c *ui.Context) {
+	icon := iconVolume
+	if a.vol == 0 {
+		icon = iconMute
+	} else if a.vol < 50 {
+		icon = iconVolumeLow
+	}
+	if b := iconButton(c.Key("mute"), icon, 14, colors.muted, "静音"); b.Clicked() {
+		a.vol = map[bool]float64{true: 0, false: 100}[a.vol == 0]
+		a.codieVolume(a.vol / 100)
+	}
+	sl := ui.Slider(c.Key("vol"), &a.vol, 0, 100).Width(90)
+	if sl.Changed() {
+		a.codieVolume(a.vol / 100)
 	}
 }
 
