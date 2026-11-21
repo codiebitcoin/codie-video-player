@@ -196,6 +196,10 @@ func Run(bundledPlugins embed.FS) error {
 			MinWidth:  920,
 			MinHeight: 600,
 			StateKey:  "main",
+		// The strip along the top is the app's own; the traffic lights sit
+		// centered in it, and the strip's first element leaves them room.
+		TitleBarHeight:       topBarHeight,
+		TrafficLightPosition: &mygo.Point{X: 20, Y: 14},
 			// The chrome is the app's own: a dark bar of chips over the grid.
 			TitleBarStyle:   mygo.TitleBarHidden,
 			BackgroundColor: "#141416",

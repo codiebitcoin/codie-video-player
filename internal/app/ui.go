@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -95,7 +96,13 @@ func (a *app) shortcutVolume(d float64) {
 // topBar is the strip the window buttons sit over: back, forward, the name,
 // and the search field. It drags the window where nothing takes the press.
 func (a *app) topBar(c *ui.Context) {
-	ui.Row(c).Height(topBarHeight).Padding(12, 16, 4, 16).Gap(12).AlignItems(ui.Center).DragWindow().Children(func() {
+	// The traffic lights sit over the strip's left end on macOS; the first
+	// element clears them.
+	lead := float32(0)
+	if runtime.GOOS == "darwin" {
+		lead = 72
+	}
+	ui.Row(c).Height(topBarHeight).Padding(12, 16, 4, 16+lead).Gap(12).AlignItems(ui.Center).DragWindow().Children(func() {
 		if a.page != pageList {
 			if b := iconButton(c.Key("back"), iconBack, 16, colors.text, i18n.T("Back")); b.Clicked() {
 				a.back()

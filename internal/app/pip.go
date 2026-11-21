@@ -45,9 +45,10 @@ func (a *app) openPip() {
 		Height:          pipHeight(),
 		X:               px,
 		Y:               py,
-		TitleBarStyle:   mygo.TitleBarHidden,
-		BackgroundColor: "#000000",
-		Content:         ui.View(a.pipContent),
+		TitleBarStyle:      mygo.TitleBarHidden,
+		HideWindowButtons:  true, // the strip's own cross closes it
+		BackgroundColor:    "#000000",
+		Content:            ui.View(a.pipContent),
 	})
 	a.pipWin.SetAlwaysOnTop(true)
 	a.pipWin.OnClose(func(*mygo.CloseEvent) {

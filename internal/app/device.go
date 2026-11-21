@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"runtime"
+
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
@@ -93,7 +95,11 @@ func (a *app) deviceView(c *ui.Context) {
 	t.Accent, t.AccentHover, t.AccentPressed = colors.accent, colors.accent, colors.accent
 	c.SetTheme(&t)
 	c.Root().Background(colors.bg)
-	ui.Scroll(c.Key("device")).Fill().Padding(24, 28, 28, 28).Children(func() {
+	lead := float32(0)
+	if runtime.GOOS == "darwin" {
+		lead = 30 // the traffic lights sit over the window's top-left
+	}
+	ui.Scroll(c.Key("device")).Fill().Padding(24+lead, 28, 28, 28).Children(func() {
 		if a.codie == nil {
 			a.pairingView(c)
 			return

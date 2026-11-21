@@ -28,9 +28,10 @@ func (a *app) openSettingsWindow() {
 		Height:          640,
 		MinWidth:        460,
 		MinHeight:       420,
-		TitleBarStyle:   mygo.TitleBarHidden,
-		BackgroundColor: "#141416",
-		Content:         ui.View(a.settingsContent),
+		TitleBarStyle:      mygo.TitleBarHidden,
+		HideWindowButtons:  true, // the window closes by its own cross
+		BackgroundColor:    "#141416",
+		Content:            ui.View(a.settingsContent),
 	})
 	a.settingsWin.OnClose(func(e *mygo.CloseEvent) {
 		// It goes when it closes; the next open makes it again.
