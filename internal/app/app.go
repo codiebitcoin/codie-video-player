@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -47,6 +48,7 @@ type app struct {
 	gridPage    int // the last page loaded, 0 for none
 	gridLoading bool
 	gridErr     string
+	retried     bool // a cold source's first ask already asked again
 
 	// The detail page.
 	detail        *video.Video
@@ -62,6 +64,44 @@ type app struct {
 	scrub      scrubState
 	vol        float64
 
+	// How the player behaves beyond the basics: how fast it plays, whether
+	// the window is fullscreen, the episode drawer and the rate popover,
+	// the seconds to the next episode, and the little window.
+	rate          float64
+	fullscreen    bool
+	drawerOpen    bool
+	speedOpen     bool
+	nextLeft      int         // seconds to the next episode, 0 for none
+	nextTimer     *time.Timer // counting it down
+	nextLatch     bool        // this episode already counted down once
+	resumeAt      float64     // seconds into the episode it opens at
+	watchTimer    *time.Timer // records how far the episode is, now and then
+	pipWin        *mygo.Window
+	epsList       ui.ListState // the drawer's long list of episodes
+
+	// The viewer's own: follows, history, and how far each drama is.
+	lib *library
+
+	// Where a back can go forward to.
+	fwd []location
+
+	// The controls over the picture: whether they show, and when to take
+	// them away again.
+	controlsOn  bool
+	controlsAt  time.Time
+	controlsTmr *time.Timer
+
+	// A search's answers, one group to a source, and which of them shows.
+	searchGroups []searchGroup
+	searchFilter string // "all", or one source's id
+
+	// An update, when the repo has one newer than the app.
+	updateTag     string
+	updateURL     string
+	updateChecking bool
+
+	saveTmr *time.Timer // the settings' write, once the changes settle
+
 	// 在 codie 上播放:转好的 MP4 开成设备的媒体会话,画面落在它的屏幕上。
 	deviceOutput bool
 	codieSession string
@@ -76,6 +116,7 @@ type app struct {
 	// The codie device, paired, and where its dialog is.
 	codie       *codieout.Client
 	deviceWin   *mygo.Window
+	settingsWin *mygo.Window
 	pair        pairState
 	pairAddrBox ui.Handle
 	pairCodeBox ui.Handle
@@ -112,18 +153,34 @@ func (a *app) post(fn func()) {
 	})
 }
 
+// current is the one app there is, for the tray's menu and such, which the
+// Run closure holds otherwise.
+var current *app
+
 // Run runs the app until it quits.
 func Run(bundledPlugins embed.FS) error {
 	if !mygo.App.RequestSingleInstanceLock() {
 		return nil
 	}
 	a := &app{vol: 100, bundled: bundledPlugins}
+	current = a
 	a.covers = newCovers(a.post)
 	mygo.App.WhenReady(func() {
 		a.settings = loadSettings()
+		a.lib = loadLibrary(userDataDir(""))
+		a.vol = a.settings.Volume
+		if a.vol <= 0 {
+			a.vol = 100
+		}
+		a.rate = a.settings.Rate
+		if a.rate <= 0 {
+			a.rate = 1
+		}
 		a.makeSources(bundledPlugins)
 		a.loadCodie()
 		i18nReady()
+		a.checkForUpdates()
+		makeTray()
 		a.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:     "Codie 视频",
 			Width:     1180,
@@ -220,9 +277,11 @@ func (a *app) useSource(id string) {
 	a.page = pageList
 	a.detail = nil
 	a.searching = false
+	a.searchGroups = nil
 	a.query = ""
 	a.tabID = ""
 	a.tabs, a.tabsLoading = nil, false
+	a.fwd = nil
 	a.clearGrid()
 	a.loadTabs()
 	a.loadTab()
@@ -299,9 +358,11 @@ func (a *app) clearGrid() {
 	a.gridLoading, a.gridErr = false, ""
 }
 
-// loadTab loads the first of what the tab lists, asking anew.
+// loadTab loads the first of what the tab lists, asking anew. A cold source
+// gets one ask again on its own.
 func (a *app) loadTab() {
 	a.clearGrid()
+	a.retried = false
 	a.loadMore()
 }
 
@@ -324,34 +385,25 @@ func (a *app) loadMore() {
 		a.post(func() {
 			a.gridLoading = false
 			if err != nil {
+				// A plugin just started sometimes fails its first ask —
+				// its scripts are still warming. Ask once more before
+				// owning up.
+				if next == 1 && len(a.items) == 0 && !a.retried {
+					a.retried = true
+					a.gridLoading = true
+					time.AfterFunc(1200*time.Millisecond, func() { a.post(a.loadMore) })
+					return
+				}
 				a.gridErr = videoProblem(err, "这一页没加载出来")
 				return
 			}
 			a.gridPage = next
 			a.items = append(a.items, l.Items...)
-		})
-	}()
-}
-
-// search asks the source what q is, and the grid shows it.
-func (a *app) search(q string) {
-	q = strings.TrimSpace(q)
-	src := a.sourceEntry
-	if q == "" || src == nil {
-		return
-	}
-	a.searching = true
-	a.clearGrid()
-	a.gridLoading = true
-	go func() {
-		r, err := src.src.Search(q, 0)
-		a.post(func() {
-			a.gridLoading = false
-			if err != nil {
-				a.gridErr = videoProblem(err, "搜索失败")
-				return
+			for i := range a.items {
+				if a.items[i].Source == "" {
+					a.items[i].Source = src.id
+				}
 			}
-			a.items = r.Items
 		})
 	}()
 }
@@ -387,21 +439,9 @@ func (a *app) openDetail(item video.Item) {
 	}()
 }
 
-// back goes back a page of the window.
-func (a *app) back() {
-	switch a.page {
-	case pagePlay:
-		a.stopPlayer()
-		a.playerErr = ""
-		a.playing = playing{}
-		a.page = pageDetail
-	case pageDetail:
-		a.page = pageList
-		a.detail = nil
-	}
-}
-
 // playEpisode opens an episode in the player, of the source it came from.
+// The drama's page comes along if it isn't there yet, so the drawer and the
+// episode buttons work from the first second.
 func (a *app) playEpisode(item video.Item, ep video.Episode, at int) {
 	src := a.sourceOf(item.Source)
 	if src == nil {
@@ -409,6 +449,39 @@ func (a *app) playEpisode(item video.Item, ep video.Episode, at int) {
 	}
 	if src == nil {
 		return
+	}
+	if item.Source == "" {
+		item.Source = src.id
+	}
+	a.recordPlayProgress()
+	a.cancelNext()
+	if a.pipWin != nil {
+		a.closePip()
+	}
+	a.stopPlayer()
+	a.playerErr = ""
+	a.controlsOn = true
+	a.nextLatch = false
+	a.playing = playing{item: item, ep: ep, at: at}
+	a.page = pagePlay
+	// 接着看:上一次看到哪儿,这集从哪儿起。
+	a.resumeAt = 0
+	if p := a.lib.progressOf(item.ID); p != nil && p.EpID == ep.ID && p.Pos > 10 && !p.Done {
+		a.resumeAt = p.Pos
+	}
+	// The drawer and the episode buttons need the drama whole; a play that
+	// didn't come off the drama's page asks for it behind the stream.
+	if a.detail == nil || a.detail.ID != item.ID {
+		a.detail = &video.Video{Item: item}
+		go func() {
+			v, err := src.src.Video(item.ID)
+			a.post(func() {
+				if err != nil || v == nil || a.playing.item.ID != item.ID || a.page != pagePlay {
+					return
+				}
+				a.detail = v
+			})
+		}()
 	}
 	// 在 codie 上播放:取流后交给设备的媒体会话。
 	if a.deviceOutput && a.codie != nil {
@@ -425,14 +498,12 @@ func (a *app) playEpisode(item video.Item, ep video.Episode, at int) {
 				return
 			}
 			log.Printf("codie play: resolved (%s, audio=%v)", s.Type, s.AudioURL != "")
-			a.post(func() { a.playEpisodeOnDevice(item, ep, at, s) })
+			// 转码和上传都在这条 goroutine 上,主线程只收结果。
+			go a.playEpisodeOnDevice(item, ep, at, s)
 		}()
 		return
 	}
-	a.stopPlayer()
-	a.playerErr = ""
-	a.playing = playing{item: item, ep: ep, at: at}
-	a.page = pagePlay
+	a.lib.watch(item, ep, at, 0, 0, false)
 	go func() {
 		s, err := src.src.Play(item.ID, ep.ID)
 		if err != nil {
@@ -453,8 +524,97 @@ func (a *app) playEpisode(item video.Item, ep video.Episode, at int) {
 			}
 			a.player, a.playerFile = p, file
 			p.SetVolume(a.vol / 100)
+			if a.rate != 1 {
+				p.SetRate(a.rate)
+			}
+			if a.resumeAt > 0 {
+				p.Seek(time.Duration((a.resumeAt - 2) * float64(time.Second)))
+				a.resumeAt = 0
+			}
+			a.startWatchTicker()
 		})
 	}()
+}
+
+// recordPlayProgress writes how far the episode on now is into the library.
+func (a *app) recordPlayProgress() {
+	if a.playing.item.ID == "" || a.lib == nil {
+		return
+	}
+	var pos, dur float64
+	done := false
+	if a.deviceOutput {
+		p, d := a.codieTimes()
+		pos, dur = p.Seconds(), d.Seconds()
+	} else if p := a.player; p != nil && p.Ready() && p.Err() == nil {
+		pos, dur = p.Position().Seconds(), p.Duration().Seconds()
+	}
+	if dur > 0 && pos >= dur-1.5 {
+		done = true
+	}
+	a.lib.watch(a.playing.item, a.playing.ep, a.playing.at, pos, dur, done)
+}
+
+// startWatchTicker records the progress now and again, for an episode that
+// plays a long while — here or on the device.
+func (a *app) startWatchTicker() {
+	a.stopWatchTicker()
+	a.watchTimer = time.AfterFunc(10*time.Second, func() {
+		a.post(func() {
+			local := a.player != nil && a.player.Playing()
+			device := a.deviceOutput && a.codieSession != ""
+			if !local && !device {
+				return
+			}
+			a.recordPlayProgress()
+			a.startWatchTicker()
+		})
+	})
+}
+
+// stopWatchTicker ends the recording of the progress.
+func (a *app) stopWatchTicker() {
+	if a.watchTimer != nil {
+		a.watchTimer.Stop()
+		a.watchTimer = nil
+	}
+}
+
+// startNextCountdown counts the seconds to the next episode, showing them on
+// the stage, and plays it when they run out.
+func (a *app) startNextCountdown() {
+	if a.nextTimer != nil || !a.hasEpisode(1) || a.settings.NoAutoNext {
+		return
+	}
+	a.nextLeft = 8
+	a.win.Invalidate()
+	a.nextTimer = time.AfterFunc(time.Second, func() { a.post(a.tickNext) })
+}
+
+// tickNext is one second less to the next episode.
+func (a *app) tickNext() {
+	a.nextTimer = nil
+	if a.page != pagePlay || a.nextLeft <= 1 {
+		if a.nextLeft <= 1 && a.page == pagePlay {
+			a.nextLeft = 0
+			a.nextEpisode(false)
+			return
+		}
+		a.nextLeft = 0
+		return
+	}
+	a.nextLeft--
+	a.win.Invalidate()
+	a.nextTimer = time.AfterFunc(time.Second, func() { a.post(a.tickNext) })
+}
+
+// cancelNext takes the countdown to the next episode away.
+func (a *app) cancelNext() {
+	if a.nextTimer != nil {
+		a.nextTimer.Stop()
+		a.nextTimer = nil
+	}
+	a.nextLeft = 0
 }
 
 // nextEpisode opens the episode after the one playing, or the one before.
@@ -475,6 +635,12 @@ func (a *app) nextEpisode(back bool) {
 
 // stopPlayer ends what plays, and its file — here or on the device.
 func (a *app) stopPlayer() {
+	a.cancelNext()
+	a.stopWatchTicker()
+	if a.controlsTmr != nil {
+		a.controlsTmr.Stop()
+		a.controlsTmr = nil
+	}
 	a.stopPlayerForCodie()
 	p, file := a.player, a.playerFile
 	a.player, a.playerFile = nil, ""
@@ -484,6 +650,39 @@ func (a *app) stopPlayer() {
 	if file != "" {
 		go os.Remove(file)
 	}
+}
+
+// setRate plays the episode at r times the usual speed, now and from now on.
+func (a *app) setRate(r float64) {
+	a.rate = r
+	a.settings.Rate = r
+	a.saveSettingsSoon()
+	if p := a.player; p != nil {
+		p.SetRate(r)
+	}
+}
+
+// setVolume sets how loud the episode plays, and keeps it for next time.
+func (a *app) setVolume(v float64) {
+	a.vol = v
+	a.settings.Volume = v
+	a.saveSettingsSoon()
+}
+
+// saveSettingsSoon writes the settings once the changes settle.
+func (a *app) saveSettingsSoon() {
+	if a.saveTmr != nil {
+		a.saveTmr.Reset(600 * time.Millisecond)
+		return
+	}
+	a.saveTmr = time.AfterFunc(600*time.Millisecond, func() {
+		a.post(func() {
+			a.saveTmr = nil
+			if a.settings != nil {
+				a.settings.save()
+			}
+		})
+	})
 }
 
 // ---- the small things ----
@@ -505,7 +704,24 @@ func videoProblem(err error, msg string) string {
 // settings is what the app keeps of the listener's.
 type settings struct {
 	Source string `json:"source,omitempty"`
-	path   string
+	// Volume is how loud, from 0 to 100; Rate, how many times the usual
+	// speed. Both carry from one episode to the next, and one run to the
+	// next.
+	Volume float64 `json:"volume,omitempty"`
+	Rate   float64 `json:"rate,omitempty"`
+	// NoAutoNext stops the next episode from coming on its own when one
+	// ends.
+	NoAutoNext bool `json:"noAutoNext,omitempty"`
+	// SearchHistory is the last queries, newest first, as chips under the
+	// search field.
+	SearchHistory []string `json:"searchHistory,omitempty"`
+	// WizardDone stops the first run's hello from coming again.
+	WizardDone bool `json:"wizardDone,omitempty"`
+	// UpdatesChecked is when the repo was last asked for a newer release.
+	UpdatesChecked time.Time `json:"updatesChecked,omitzero"`
+	// DisabledPlugins are the ids of the plugins turned off.
+	DisabledPlugins []string `json:"disabledPlugins,omitempty"`
+	path            string
 }
 
 func (s *settings) save() {
