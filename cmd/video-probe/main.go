@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"codie-video-player/internal/plugin"
+	"codie-video-player/internal/video"
 )
 
 // 直调一个视频插件的各个导出,看真实回答:
@@ -47,6 +48,9 @@ func main() {
 	}
 	if v.Can("videoSearch") {
 		r, err := v.Search("test", 0)
+		if r == nil {
+			r = &video.VideoResult{}
+		}
 		fmt.Printf("search: %d items, err: %v\n", len(r.Items), err)
 	}
 }
