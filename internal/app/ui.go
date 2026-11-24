@@ -160,13 +160,14 @@ func (a *app) shortcutVolume(d float64) {
 // and the settings and device buttons. It drags the window where nothing
 // takes the press. The source picker and the search live in the sidebar.
 func (a *app) topBar(c *ui.Context) {
-	// The traffic lights sit over the sidebar's top on macOS; elsewhere the
-	// window buttons sit over this strip's left end, which clears them.
-	lead := float32(0)
+	// The traffic lights sit over the sidebar's top on macOS. Elsewhere the
+	// window buttons sit over this strip: Windows keeps minimize, maximize and
+	// close at its right end, Linux at its left, so both ends clear them.
+	lead, trail := float32(0), float32(0)
 	if runtime.GOOS != "darwin" {
-		lead = 72
+		lead, trail = 72, 138
 	}
-	ui.Row(c).Height(topBarHeight).Padding(12, 16, 4, 16+lead).Gap(12).AlignItems(ui.Center).DragWindow().Children(func() {
+	ui.Row(c).Height(topBarHeight).Padding(12, 16+trail, 4, 16+lead).Gap(12).AlignItems(ui.Center).DragWindow().Children(func() {
 		if a.page != pageList {
 			if b := iconButton(c.Key("back"), iconBack, 16, colors.text, i18n.T("Back")); b.Clicked() {
 				a.back()
