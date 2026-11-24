@@ -1,33 +1,40 @@
 # Codie Video Player
 
-短剧/漫剧桌面播放器 —— Codie 家族的视频工具，按视频工具的思路设计：分类（短剧/漫剧/AI魔改/AI换脸）、今年、排行、搜索，网格直达详情和播放，没有音乐、文件夹、歌曲、专辑这些概念。
+A desktop player for short dramas and videos, made for the CODE27 family. Pick a source, pick a category, and play — in the app, or on a paired codie device's own screen. It speaks English, 简体中文 and 日本語.
 
-## 源
+简体中文: [README.zh-CN.md](README.zh-CN.md) · 日本語: [README.ja.md](README.ja.md)
 
-| 源 | 方式 | 内容 |
+## Sources
+
+| Source | How | What it plays |
 |---|---|---|
-| 黄果短剧 | 内置 Go 客户端（`internal/source/huangguo`） | 热门/最新/今年 + 站点分类，HLS 直播，封面 AES 解密 |
-| Bilibili | 插件（`plugins/bilibili`） | 热门/最新 + 搜索，DASH 视音分离经 ffmpeg 合流 |
-| YouTube Music | 插件（`plugins/youtube-music`） | 搜索，yt-dlp 下载合并 mp4 |
+| Local | Built in (`internal/source/local`) | Folders you add on this computer. Each folder is a group; every video file in it plays directly, with no network. |
+| YouTube | Plugin (`plugins/youtube-music`) | Popular, Music, Gaming, News and Movies, plus search. Live streams are left out. |
+| Bilibili | Plugin (`plugins/bilibili`) | Popular, ranking and latest, plus your favorites and collections once you sign in. |
+| 黄果短剧 | Built in (`internal/source/huangguo`) | Short dramas: popular, latest, this year and the site's own categories. Shipped with the app and off until you turn it on in Settings. |
 
-插件是普通 JS 目录（`plugin.json` + `index.js`），实现 `videoTabs / videoList / videoSearch / videoItem / videoPlay` 这些导出即可成为视频源；放进应用的 plugins 目录（或首次运行自动装内置插件）即可被发现。要接新站，改一份插件就好。
+Continue Watching and Following are kept per source, so what you watched on one never shows on another.
 
-## 用
+A plugin is an ordinary directory of JavaScript (`plugin.json` + `index.js`) that exports `videoTabs`, `videoList`, `videoSearch`, `videoItem` and `videoPlay`. Drop it in the app's plugins folder, or let the first run install the ones the app ships. To add a site, write a plugin.
 
-1. 顶栏「连接设备」填 codie 设备 IP，输入设备屏幕上的 6 位配对码
-2. 配对后自动探测设备能力（`media/capabilities` 会自己报它能放什么）
-3. 选源 → 选分类 → 点剧 → 点集，视频在应用里播
+## Play on a codie device
 
-## 构建
+1. Connect Device, fill in the device's IP, and enter the 6-digit code its screen shows.
+2. Pick a character slot, then play. The episode is transcoded to what the device accepts and shown fullscreen on its screen.
+3. If the screen is already taken, the player releases the session holding it and plays again.
+4. While codie is selected, the volume slider controls the device, not this computer.
+
+## Build
 
 ```bash
-go build ./...
-go run .        # 本地起一个
+go test ./internal/...
+go tool mygo build          # the desktop app, from mygo.config.ts
+make web-run                # the browser face, on 127.0.0.1:8080
 ```
 
-Windows / Linux 打包与 mygo 的一致（`mygo.config.ts`）。
+`go tool mygo build -platform darwin/arm64,windows/amd64,linux/amd64` builds every platform from one machine. The web face is the same sources over HTTP, in `cmd/web`, and the image is `deploy/docker-compose.yml`.
 
-## 说明
+## Notes
 
-- 内容均来自第三方站点，本项目不存储、不分发任何音视频，仅供学习与技术交流
-- 播放 HLS 需要 macOS 13+ / Windows 10+；Linux 需要 GStreamer（缺省走 ffmpeg 转封装）
+- Content comes from third-party sites. This project stores none of it and redistributes none of it; it only plays what those sites serve, for learning and technical exchange.
+- HLS plays on macOS 13+ and Windows 10+. On Linux it goes through ffmpeg when GStreamer has no HLS plugins.
