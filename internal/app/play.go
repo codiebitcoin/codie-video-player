@@ -29,15 +29,19 @@ const ffmpegTimeout = 10 * time.Minute
 // openEpisodeStream opens what an episode plays through. The second answer is
 // a file made for the player, which the caller gives up when another comes.
 // It's a variable so tests can put a fake in.
-var openEpisodeStream = func(s *video.Stream) (*ui.VideoPlayer, string, error) {
-	switch {
-	case s.AudioURL != "", len(s.Headers) > 0, s.Type == "hls" && runtime.GOOS == "linux":
-		return throughFFmpeg(s)
-	default:
-		p, err := mygovideo.OpenURL(s.URL)
-		return p, "", err
+	var openEpisodeStream = func(s *video.Stream) (*ui.VideoPlayer, string, error) {
+		switch {
+		case s.Type == "file":
+			// A file on this machine plays as it is; the proxy never sees it.
+			p, err := mygovideo.Open(s.URL)
+			return p, "", err
+		case s.AudioURL != "", len(s.Headers) > 0, s.Type == "hls" && runtime.GOOS == "linux":
+			return throughFFmpeg(s)
+		default:
+			p, err := mygovideo.OpenURL(s.URL)
+			return p, "", err
+		}
 	}
-}
 
 // throughFFmpeg makes the episode into one mp4 for the player: one whose
 // picture and sound are apart gets them joined, and one the system won't
@@ -56,6 +60,7 @@ func throughFFmpeg(s *video.Stream) (*ui.VideoPlayer, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), ffmpegTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffmpeg, ffmpegArgs(s, dst)...)
+	cmd.Env = proxyEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		os.Remove(dst)

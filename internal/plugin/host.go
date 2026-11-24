@@ -27,6 +27,7 @@ import (
 	"github.com/MoeForge/moejs/webapi"
 
 	"codie-video-player/internal/i18n"
+	"codie-video-player/internal/proxy"
 )
 
 // openURL opens a page in the listener's browser. The app sets it.
@@ -376,6 +377,11 @@ func (p *Plugin) spawn(v *vm) native {
 		cmd := exec.Command(command, cmdArgs...)
 		cmd.Dir = p.dir
 		hideConsole(cmd)
+		// The programs' own fetches, yt-dlp's and ffmpeg's, go through the
+		// app's HTTP proxy with it set, the local addresses excepted.
+		if env := proxy.EnvVars(); len(env) > 0 {
+			cmd.Env = append(os.Environ(), env...)
+		}
 		stderr := &tailWriter{to: logWriter{p.manifest.ID}}
 		cmd.Stderr = stderr
 		stdin, err := cmd.StdinPipe()

@@ -47,6 +47,7 @@ import (
 	"github.com/MoeForge/moejs/webapi"
 
 	"codie-video-player/internal/i18n"
+	"codie-video-player/internal/proxy"
 	"codie-video-player/internal/video"
 )
 
@@ -553,7 +554,9 @@ func (p *Plugin) webOptions() webapi.Options {
 	if len(hosts) == 0 {
 		return webapi.Options{}
 	}
-	opts := webapi.Options{Client: &http.Client{Timeout: 10 * time.Minute}}
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = proxy.Func
+	opts := webapi.Options{Client: &http.Client{Timeout: 10 * time.Minute, Transport: t}}
 	for _, h := range hosts {
 		if h == "*" {
 			return opts
@@ -698,6 +701,19 @@ func (p *Plugin) drop(v *vm) {
 	// Terminate waits for the loop, which the plugin may be keeping busy; it
 	// interrupts it first, so this ends, but needn't hold up the caller.
 	go v.close()
+}
+
+// Call asks the plugin one of its functions by name — account, say, for the
+// app's own dialogs — with params in and the answer into out, when out isn't
+// nil. It waits as long as any ask does.
+func (p *Plugin) Call(method string, params, out any) error {
+	return p.call(method, params, out)
+}
+
+// SignIn asks the plugin to sign the listener in, which may show a page the
+// listener works in, so it waits as long as a sign-in page does.
+func (p *Plugin) SignIn() error {
+	return p.callWithin(signInTimeout, "signIn", nil, nil)
 }
 
 // Info is what plugin.json says of the plugin, its name in the listener's

@@ -130,8 +130,9 @@ var appearanceNames = []struct{ id, key string }{
 // languageNames are the language settings, each named in itself.
 func languageNames() []struct{ id, key string } {
 	return []struct{ id, key string }{
-		{i18n.System, "Follow System"},
 		{i18n.English, "English"},
 		{i18n.Chinese, "简体中文"},
+		{i18n.Japanese, "日本語"},
+		{i18n.System, "Follow System"},
 	}
 }

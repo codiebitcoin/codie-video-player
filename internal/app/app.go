@@ -8,8 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -17,8 +20,11 @@ import (
 
 	"codie-video-player/internal/codieout"
 	"codie-video-player/internal/i18n"
+	"codie-video-player/internal/library"
 	"codie-video-player/internal/plugin"
+	"codie-video-player/internal/proxy"
 	"codie-video-player/internal/source/huangguo"
+	"codie-video-player/internal/source/local"
 	"codie-video-player/internal/video"
 )
 
@@ -26,29 +32,41 @@ import (
 type app struct {
 	win *mygo.Window
 
-	// The sources of videos: the built-in Huangguo first, then the plugins'.
-	// The one showing is embedded: what the grid holds is of it.
+	// The sources of videos: the local folders first, then the plugins, the
+	// built-in Huangguo last. The one showing is embedded: what the grid holds
+	// is of it. localSrc is the local one, whose folders the settings keep.
 	sources []sourceEntry
 	*sourceEntry
-	plugins []*plugin.Plugin
-	bundled embed.FS
+	localSrc *local.Source
+	plugins  []*plugin.Plugin
+	bundled  embed.FS
 
 	// A page of the window.
 	page pageKind
 
 	// The list page: which tab shows, and what the grid holds of it.
-	tabID       string
-	tabs        []video.Tab
-	tabsLoading bool
-	tabsErr     string // the source gave no chips at all, and why
-	query       string // what's in the search field
-	searchBox   ui.Handle
-	searching   bool // the grid shows what a search found
-	items       []video.Item
-	gridPage    int // the last page loaded, 0 for none
-	gridLoading bool
-	gridErr     string
-	retried     bool // a cold source's first ask already asked again
+	tabID         string
+	tabs          []video.Tab
+	tabsLoading   bool
+	tabsErr       string // the source gave no chips at all, and why
+	query         string // what's in the search field
+	searchBox     ui.Handle
+	searching     bool // the grid shows what a search found
+	items         []video.Item
+	gridPage      int  // the last page loaded, 0 for none
+	gridMore      bool // there is a next page to load
+	gridLoading   bool
+	gridErr       string
+	retried       bool // a cold source's first ask already asked again
+	playlistQuery string
+	playlistBox   ui.Handle
+
+	// A playlist playing in sequence: the videos in order (or shuffled),
+	// which one is on now, and the playlist's name for the drawer.
+	queue      []video.Item
+	queueAt    int
+	queueTitle string
+	queueList  ui.ListState
 
 	// The detail page.
 	detail        *video.Video
@@ -67,23 +85,46 @@ type app struct {
 	// How the player behaves beyond the basics: how fast it plays, whether
 	// the window is fullscreen, the episode drawer and the rate popover,
 	// the seconds to the next episode, and the little window.
-	rate          float64
-	fullscreen    bool
-	drawerOpen    bool
-	speedOpen     bool
-	nextLeft      int         // seconds to the next episode, 0 for none
-	nextTimer     *time.Timer // counting it down
-	nextLatch     bool        // this episode already counted down once
-	resumeAt      float64     // seconds into the episode it opens at
-	watchTimer    *time.Timer // records how far the episode is, now and then
-	pipWin        *mygo.Window
-	epsList       ui.ListState // the drawer's long list of episodes
+	rate       float64
+	fullscreen bool
+	drawerOpen bool
+	speedOpen  bool
+	nextLeft   int         // seconds to the next episode, 0 for none
+	nextTimer  *time.Timer // counting it down
+	nextLatch  bool        // this episode already counted down once
+	resumeAt   float64     // seconds into the episode it opens at
+	watchTimer *time.Timer // records how far the episode is, now and then
+	pipWin     *mygo.Window
+	epsList    ui.ListState // the drawer's long list of episodes
 
 	// The viewer's own: follows, history, and how far each drama is.
-	lib *library
+	lib *library.Library
 
 	// Where a back can go forward to.
 	fwd []location
+
+	// A source's sign-in: the dialog that asks for one, the account the
+	// plugin knows, and the sign-in pages it has open, by plugin id.
+	askSignIn   bool
+	signInBusy  bool
+	signInNote  string
+	srcAcct     *srcAccount
+	favOpen     bool // the sidebar's 我的收藏 group taken in or not
+	signInPages map[string]*mygo.Window
+
+	// 在 codie 上播放:选角色槽位后再放。slotOpen 是选择框,slotChoice 是选中的
+	// 槽位,deviceSlot 是设备现在站着的那个,slotPlay 是确认后要放的这一集。
+	slotOpen   bool
+	slotChoice int
+	deviceSlot int
+	slotBusy   bool
+	slotErr    string
+	slotPlay   playing
+
+	// macOS's own no to a program a plugin started, when it happens: the
+	// dialog says so, and its retry asks the system again, which lets it
+	// through. macRetry is the ask to run again.
+	macRetry func()
 
 	// The controls over the picture: whether they show, and when to take
 	// them away again.
@@ -96,19 +137,29 @@ type app struct {
 	searchFilter string // "all", or one source's id
 
 	// An update, when the repo has one newer than the app.
-	updateTag     string
-	updateURL     string
+	updateTag      string
+	updateURL      string
 	updateChecking bool
 
 	saveTmr  *time.Timer // the settings' write, once the changes settle
-	quitting bool       // a real quit is on: the window closes instead of hiding
+	quitting bool        // a real quit is on: the window closes instead of hiding
 
 	// 在 codie 上播放:转好的 MP4 开成设备的媒体会话,画面落在它的屏幕上。
-	deviceOutput bool
-	codieSession string
-	codieFile    string
-	codieState   *codieout.MediaSessionState
-	codieBusy    string
+	// 超出 128MiB 的长视频会拆成多段 codieSegs 顺序无缝接力,对外仍是一集。
+	deviceOutput      bool
+	codieSession      string
+	codieFile         string
+	codieSegs         []codieSegment
+	codieSegAt        int
+	codieTotalMS      int64
+	codieSwitchingSeg bool
+	codieGen          uint64
+	codieState        *codieout.MediaSessionState
+	codieBusy         string
+
+	// The conversation tools: the catalog served to the paired device, so
+	// what the viewer says to it ("next one", "play …") moves the playback.
+	tools *agentTools
 
 	covers *coverCache
 
@@ -163,17 +214,21 @@ func Run(bundledPlugins embed.FS) error {
 	if !mygo.App.RequestSingleInstanceLock() {
 		return nil
 	}
-	a := &app{vol: 100, bundled: bundledPlugins}
+	setupLog()
+	a := &app{vol: 100, favOpen: true, bundled: bundledPlugins}
 	current = a
 	a.covers = newCovers(a.post)
 	mygo.App.WhenReady(func() {
 		a.settings = loadSettings()
-		a.lib = loadLibrary(userDataDir(""))
+		a.lib = library.Load(userDataDir(""))
+		proxy.Set(a.settings.Proxy)
 		if a.settings.Appearance == "" {
 			a.settings.Appearance = AppearanceSystem
 		}
 		if a.settings.Language == "" {
-			a.settings.Language = i18n.System
+			// English unless the listener picks another; the system's own
+			// language is a choice too, not the default.
+			a.settings.Language = i18n.English
 		}
 		a.setLanguage()
 		a.applyPalette()
@@ -187,6 +242,7 @@ func Run(bundledPlugins embed.FS) error {
 		}
 		a.makeSources(bundledPlugins)
 		a.loadCodie()
+		log.Printf("app ready: version=%s lang=%s codie=%v", mygo.App.Version(), a.settings.Language, a.codie != nil)
 		a.checkForUpdates()
 		makeTray()
 		a.win = mygo.NewWindow(mygo.WindowOptions{
@@ -196,10 +252,10 @@ func Run(bundledPlugins embed.FS) error {
 			MinWidth:  920,
 			MinHeight: 600,
 			StateKey:  "main",
-		// The strip along the top is the app's own; the traffic lights sit
-		// centered in it, and the strip's first element leaves them room.
-		TitleBarHeight:       topBarHeight,
-		TrafficLightPosition: &mygo.Point{X: 20, Y: 14},
+			// The strip along the top is the app's own; the traffic lights sit
+			// centered in it, and the strip's first element leaves them room.
+			TitleBarHeight:       topBarHeight,
+			TrafficLightPosition: &mygo.Point{X: 20, Y: 14},
 			// The chrome is the app's own: a dark bar of chips over the grid.
 			TitleBarStyle:   mygo.TitleBarHidden,
 			BackgroundColor: "#141416",
@@ -207,6 +263,7 @@ func Run(bundledPlugins embed.FS) error {
 		})
 		a.loadTabs()
 		a.loadTab()
+		a.loadAccount(true)
 		if shotHook != nil {
 			shotHook(a)
 		}
@@ -225,6 +282,9 @@ func Run(bundledPlugins embed.FS) error {
 			log.Printf("lifecycle: before-quit")
 			a.quitting = true
 			a.recordPlayProgress()
+			if a.tools != nil {
+				a.tools.stop()
+			}
 		})
 	})
 	mygo.App.OnActivate(func(bool) {
@@ -244,32 +304,101 @@ func Run(bundledPlugins embed.FS) error {
 
 // ---- the sources ----
 
-// makeSources lists where videos come from: the built-in Huangguo first, then
-// the plugins that play videos, the one last used showing.
+// makeSources lists where videos come from: the local folders first, then the
+// plugins that play videos, the built-in Huangguo last, the one last used
+// showing.
 func (a *app) makeSources(bundledPlugins embed.FS) {
 	plugin.SetOpenURL(mygo.Shell.OpenExternal)
 	plugin.SetAppVersion(mygo.App.Version())
-	plugin.SetWebSignIn(func(plugin.WebSignIn) (string, error) {
-		return "", errors.New(i18n.T("This app doesn\u2019t sign in to accounts"))
-	})
+	plugin.SetWebSignIn(a.webSignIn)
 	ensureBundledPlugins(bundledPlugins)
 	a.plugins = plugin.Discover(pluginsDir(), userDataDir("plugin-data"))
-	a.sources = []sourceEntry{{id: "huangguo", name: "黄果短剧", src: &huangguo.Source{}}}
+	a.localSrc = &local.Source{Folders: append([]string(nil), a.settings.LocalFolders...)}
+	a.sources = []sourceEntry{
+		{id: local.ID, name: i18n.T("Local"), src: a.localSrc},
+	}
+	// Huangguo ships with the app and starts off; the settings turn it on.
+	if !a.sourceDisabled("huangguo") {
+		a.sources = append(a.sources, sourceEntry{id: "huangguo", name: "黄果短剧", src: &huangguo.Source{}})
+	}
 	for _, p := range a.plugins {
-		if v := p.Video(); v != nil {
-			e := sourceEntry{id: v.Info().ID, name: v.Info().Name, src: v}
-			if len(p.Permissions().Process) > 0 && !p.Granted() {
-				e.grant = p
+		// The listener's yes is the default: a plugin's programs — ffmpeg,
+		// yt-dlp — run without a banner asking again. macOS still has its
+		// own say, which a failed run's dialog asks past.
+		if len(p.Permissions().Process) > 0 && !p.Granted() {
+			if err := p.Grant(true); err != nil {
+				log.Printf("grant %s: %v", p.Info().ID, err)
+			} else {
+				log.Printf("granted process permission to %s", p.Info().ID)
 			}
+		}
+		if v := p.Video(); v != nil {
+			e := sourceEntry{id: v.Info().ID, name: v.Info().Name, src: v, plugin: p}
 			a.sources = append(a.sources, e)
 		}
 	}
+	// The dropdown reads: the local folders, then YouTube, then Bilibili,
+	// then the other plugins, the built-in source last.
+	slices.SortStableFunc(a.sources, func(x, y sourceEntry) int {
+		rank := func(e sourceEntry) int {
+			switch e.id {
+			case local.ID:
+				return 0
+			case "youtube":
+				return 1
+			case "bilibili":
+				return 2
+			case "huangguo":
+				return 4
+			default:
+				return 3
+			}
+		}
+		return rank(x) - rank(y)
+	})
 	if a.sourceEntry == nil || a.sourceOf(a.sourceEntry.id) == nil {
 		a.sourceEntry = a.sourceOf(a.settings.Source)
 		if a.sourceEntry == nil {
 			a.sourceEntry = &a.sources[0]
 		}
 	}
+}
+
+// sourceDisabled reports whether a built-in source is turned off.
+func (a *app) sourceDisabled(id string) bool {
+	for _, d := range a.settings.DisabledSources {
+		if d == id {
+			return true
+		}
+	}
+	return false
+}
+
+// setSourceDisabled turns a built-in source off or on, and the list of
+// sources with it.
+func (a *app) setSourceDisabled(id string, disabled bool) {
+	on := a.sourceDisabled(id)
+	if disabled == on {
+		return
+	}
+	if disabled {
+		a.settings.DisabledSources = append(a.settings.DisabledSources, id)
+		if a.sourceEntry != nil && a.sourceEntry.id == id {
+			a.settings.Source = ""
+			a.sourceEntry = nil
+		}
+	} else {
+		for i, d := range a.settings.DisabledSources {
+			if d == id {
+				a.settings.DisabledSources = append(a.settings.DisabledSources[:i], a.settings.DisabledSources[i+1:]...)
+				break
+			}
+		}
+	}
+	a.settings.save()
+	a.makeSources(a.bundled)
+	a.loadTabs()
+	a.loadTab()
 }
 
 // sourceOf finds the source of id, or nil.
@@ -294,30 +423,95 @@ func (a *app) useSource(id string) {
 	a.settings.save()
 	a.page = pageList
 	a.detail = nil
+	a.detailOf = ""
 	a.searching = false
 	a.searchGroups = nil
 	a.query = ""
+	a.playlistQuery = ""
+	a.clearQueue()
 	a.tabID = ""
 	a.tabs, a.tabsLoading = nil, false
 	a.fwd = nil
 	a.clearGrid()
 	a.loadTabs()
 	a.loadTab()
+	a.loadAccount(true)
 }
 
-// grantSource lets the plugin of id start the programs it names, which its
-// streams play through.
-func (a *app) grantSource(id string) {
-	for _, p := range a.plugins {
-		if p.Info().ID == id {
-			p.Grant(true)
+// srcAccount is what a source's plugin says of the listener there.
+type srcAccount struct {
+	ID    string
+	Name  string
+	Image string
+}
+
+// loadAccount asks the showing source's plugin who the listener is there, for
+// the sidebar's account row. ask says whether a source freshly showing should
+// prompt for a sign-in when it has none: the listener asked for that.
+func (a *app) loadAccount(ask bool) {
+	p := a.sourceEntry.plugin
+	a.srcAcct = nil
+	if p == nil || !p.Can("account") {
+		a.askSignIn = false
+		return
+	}
+	go func() {
+		var me struct {
+			ID    string `json:"id"`
+			Name  string `json:"name"`
+			Image string `json:"imageUrl"`
 		}
+		err := p.Call("account", nil, &me)
+		if err != nil {
+			log.Printf("account %s: %v", p.Info().ID, err)
+		}
+		a.post(func() {
+			if a.sourceEntry == nil || a.sourceEntry.plugin != p {
+				return // another source is showing by now
+			}
+			// Signed out, or the ask failed: nothing to show. A fresh switch
+			// then asks for the sign-in, once the first run's hello is past.
+			if err != nil || me.ID == "" {
+				a.srcAcct = nil
+				if ask && a.settings.WizardDone {
+					a.askSignIn = true
+				}
+				return
+			}
+			a.srcAcct = &srcAccount{ID: me.ID, Name: me.Name, Image: me.Image}
+			a.askSignIn = false
+		})
+	}()
+}
+
+// startSignIn asks the showing source's plugin to sign the listener in,
+// which may open its sign-in page. Done, the account and the tabs load anew,
+// the favorites among them.
+func (a *app) startSignIn() {
+	p := a.sourceEntry.plugin
+	if p == nil || !p.Can("signIn") || a.signInBusy {
+		return
 	}
-	a.makeSources(a.bundled)
-	if e := a.sourceOf(a.sourceEntry.id); e != nil {
-		a.sourceEntry = e
-	}
-	a.loadTab()
+	a.signInBusy = true
+	a.signInNote = ""
+	go func() {
+		err := p.SignIn()
+		if err != nil {
+			log.Printf("sign-in %s: %v", p.Info().ID, err)
+		}
+		a.post(func() {
+			a.signInBusy = false
+			if err != nil {
+				a.signInNote = videoProblem(err, i18n.T("Couldn't sign in"))
+				a.askSignIn = true
+				return
+			}
+			a.signInNote = ""
+			a.loadAccount(false)
+			a.loadTabs()
+			a.loadTab()
+		})
+	}()
 }
 
 // ---- the tabs and the grid ----
@@ -351,6 +545,7 @@ func (a *app) loadTabs() {
 				return
 			}
 			if err != nil {
+				log.Printf("tabs %s: %v", src.id, err)
 				a.tabsErr = videoProblem(err, i18n.T("Couldn\u2019t load this source\u2019s categories"))
 			}
 		})
@@ -367,19 +562,210 @@ func (a *app) hasTab(id string) bool {
 }
 
 // useTab makes the tab of id the one showing, and loads what it lists.
+// From a drama's page or the player, it steps back to the list first. The
+// local source's add tab asks for a folder instead of listing one.
 func (a *app) useTab(id string) {
+	if id == "add" && a.sourceEntry != nil && a.sourceEntry.id == local.ID {
+		a.addLocalFolder()
+		return
+	}
+	for a.page != pageList {
+		a.back()
+	}
 	if a.tabID == id && !a.searching {
+		if len(a.items) == 0 && !a.gridLoading {
+			a.loadTab()
+		}
 		return
 	}
 	a.tabID = id
 	a.searching = false
+	a.playlistQuery = ""
 	a.clearGrid()
 	a.loadTab()
 }
 
+// isPlaylistTab reports whether tabID is one of the listener's own playlists:
+// their favorites folders, their saved collections, their watch-later list,
+// or a folder of the local source.
+func isPlaylistTab(id string) bool {
+	return id == "watchlater" || strings.HasPrefix(id, "fav:") || strings.HasPrefix(id, "season:") ||
+		strings.HasPrefix(id, "dir:")
+}
+
+// addLocalFolder asks for a folder and takes it into the local source, as a
+// group of its own. A folder already there is left as it is.
+func (a *app) addLocalFolder() {
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+		Title:     i18n.T("Choose a folder of videos"),
+		Directory: true,
+	})
+	if err != nil || len(paths) == 0 || a.localSrc == nil {
+		return
+	}
+	dir := paths[0]
+	for _, have := range a.localSrc.Folders {
+		if have == dir {
+			return
+		}
+	}
+	a.localSrc.Folders = append(a.localSrc.Folders, dir)
+	a.settings.LocalFolders = append([]string(nil), a.localSrc.Folders...)
+	a.settings.save()
+	a.tabID = "dir:" + dir
+	a.loadTabs()
+	a.loadTab()
+}
+
+// currentTabLabel returns the showing tab's human label.
+func (a *app) currentTabLabel() string {
+	for _, t := range a.tabs {
+		if t.ID == a.tabID {
+			return a.tabLabel(t)
+		}
+	}
+	return a.tabID
+}
+
+// playlistItems returns the showing playlist's items, filtered by
+// playlistQuery when the listener typed into the playlist search field.
+func (a *app) playlistItems() []video.Item {
+	q := strings.ToLower(strings.TrimSpace(a.playlistQuery))
+	if q == "" {
+		return a.items
+	}
+	var out []video.Item
+	for _, it := range a.items {
+		if strings.Contains(strings.ToLower(it.Title), q) || strings.Contains(strings.ToLower(it.Subtitle), q) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// setQueue remembers a playlist's items as the active playback queue.
+func (a *app) setQueue(items []video.Item, at int, title string) {
+	if len(items) == 0 {
+		a.clearQueue()
+		return
+	}
+	a.queue = append([]video.Item(nil), items...)
+	if at < 0 || at >= len(a.queue) {
+		at = 0
+	}
+	a.queueAt = at
+	a.queueTitle = title
+}
+
+// clearQueue forgets the playlist queue.
+func (a *app) clearQueue() {
+	a.queue = nil
+	a.queueAt = 0
+	a.queueTitle = ""
+}
+
+// firstEpisodeOf makes the initial episode descriptor for playing an item
+// straight from a card or a playlist before its full detail comes back.
+func firstEpisodeOf(it video.Item) video.Episode {
+	if it.Source == "huangguo" {
+		return video.Episode{ID: "1"}
+	}
+	return video.Episode{ID: it.ID, Title: it.Title}
+}
+
+// playPlaylist plays a list of videos in order or shuffled, starting at start.
+func (a *app) playPlaylist(items []video.Item, start int, shuffle bool) {
+	if len(items) == 0 {
+		return
+	}
+	list := append([]video.Item(nil), items...)
+	if shuffle {
+		rand.Shuffle(len(list), func(i, j int) { list[i], list[j] = list[j], list[i] })
+		start = 0
+	}
+	if start < 0 || start >= len(list) {
+		start = 0
+	}
+	a.detailOf = ""
+	a.setQueue(list, start, a.currentTabLabel())
+	a.playQueueAt(start)
+}
+
+// playPlaylistOnCodie plays a playlist directly on the paired codie device
+// from start, using the currently selected character slot without a modal.
+func (a *app) playPlaylistOnCodie(items []video.Item, start int) {
+	if len(items) == 0 || a.codie == nil {
+		return
+	}
+	if start < 0 || start >= len(items) {
+		start = 0
+	}
+	a.detailOf = ""
+	a.setQueue(items, start, a.currentTabLabel())
+	a.deviceOutput = true
+	a.playQueueAt(start)
+}
+
+// playQueueAt plays the video at idx in the active playlist queue.
+func (a *app) playQueueAt(idx int) {
+	if idx < 0 || idx >= len(a.queue) {
+		return
+	}
+	a.queueAt = idx
+	it := a.queue[idx]
+	if a.detailOf != "" {
+		a.detailOf = it.ID
+	}
+	a.playEpisode(it, firstEpisodeOf(it), 0)
+}
+
+// playItemFromGrid plays one card directly from the grid: if the grid is a
+// playlist, the rest of the playlist follows in the queue.
+func (a *app) playItemFromGrid(items []video.Item, idx int) {
+	if idx < 0 || idx >= len(items) {
+		return
+	}
+	if isPlaylistTab(a.tabID) && !a.searching {
+		a.playPlaylist(items, idx, false)
+		return
+	}
+	a.detailOf = ""
+	a.clearQueue()
+	it := items[idx]
+	a.playEpisode(it, firstEpisodeOf(it), 0)
+}
+
+// openAndPlayTab switches to a playlist tab, loads its items, and starts
+// playing from the first one as soon as they arrive.
+func (a *app) openAndPlayTab(tabID string) {
+	src := a.sourceEntry
+	if src == nil {
+		return
+	}
+	a.useTab(tabID)
+	go func() {
+		l, err := src.src.List(tabID, 1)
+		a.post(func() {
+			if err != nil || l == nil || len(l.Items) == 0 {
+				return
+			}
+			for i := range l.Items {
+				if l.Items[i].Source == "" {
+					l.Items[i].Source = src.id
+				}
+			}
+			a.items = l.Items
+			a.gridPage = 1
+			a.gridMore = l.More
+			a.gridLoading = false
+			a.playPlaylist(l.Items, 0, false)
+		})
+	}()
+}
+
 // clearGrid forgets what the grid holds.
 func (a *app) clearGrid() {
-	a.items, a.gridPage = nil, 0
+	a.items, a.gridPage, a.gridMore = nil, 0, false
 	a.gridLoading, a.gridErr = false, ""
 }
 
@@ -420,9 +806,14 @@ func (a *app) loadMore() {
 					return
 				}
 				a.gridErr = videoProblem(err, i18n.T("Couldn’t load this page"))
+				log.Printf("list %s/%s page %d: %v", src.id, a.tabID, next, err)
+				if macBlocked(err) {
+					a.macRetry = func() { a.loadTab() }
+				}
 				return
 			}
 			a.gridPage = next
+			a.gridMore = l.More
 			a.items = append(a.items, l.Items...)
 			for i := range a.items {
 				if a.items[i].Source == "" {
@@ -448,6 +839,9 @@ func (a *app) openDetail(item video.Item) {
 	a.detail = &video.Video{Item: item}
 	a.detailLoading = true
 	a.detailErr = ""
+	if a.codie != nil && a.deviceSlot == 0 {
+		a.syncDeviceSlot()
+	}
 	go func() {
 		v, err := src.src.Video(item.ID)
 		a.post(func() {
@@ -456,7 +850,11 @@ func (a *app) openDetail(item video.Item) {
 			}
 			a.detailLoading = false
 			if err != nil {
+				log.Printf("video %s/%s: %v", src.id, item.ID, err)
 				a.detailErr = videoProblem(err, i18n.T("Couldn’t load this drama"))
+				if macBlocked(err) {
+					a.macRetry = func() { a.openDetail(item) }
+				}
 				return
 			}
 			a.detail = v
@@ -488,10 +886,18 @@ func (a *app) playEpisode(item video.Item, ep video.Episode, at int) {
 	a.controlsOn = true
 	a.nextLatch = false
 	a.playing = playing{item: item, ep: ep, at: at}
+	if len(a.queue) > 0 && (a.queueAt < 0 || a.queueAt >= len(a.queue) || a.queue[a.queueAt].ID != item.ID) {
+		for i := range a.queue {
+			if a.queue[i].ID == item.ID {
+				a.queueAt = i
+				break
+			}
+		}
+	}
 	a.page = pagePlay
 	// 接着看:上一次看到哪儿,这集从哪儿起。
 	a.resumeAt = 0
-	if p := a.lib.progressOf(item.ID); p != nil && p.EpID == ep.ID && p.Pos > 10 && !p.Done {
+	if p := a.lib.ProgressOf(item.ID); p != nil && p.EpID == ep.ID && p.Pos > 10 && !p.Done {
 		a.resumeAt = p.Pos
 	}
 	// The drawer and the episode buttons need the drama whole; a play that
@@ -505,39 +911,54 @@ func (a *app) playEpisode(item video.Item, ep video.Episode, at int) {
 					return
 				}
 				a.detail = v
+				if a.playing.at >= 0 && a.playing.at < len(v.Episodes) {
+					a.playing.ep = v.Episodes[a.playing.at]
+				}
 			})
 		}()
 	}
 	// 在 codie 上播放:取流后交给设备的媒体会话。
 	if a.deviceOutput && a.codie != nil {
+		resumeAt := a.resumeAt
+		a.resumeAt = 0
+		a.codieBusy = i18n.T("Transcoding for the device…")
 		go func() {
 			log.Printf("codie play: resolving %s / %s", item.ID, ep.ID)
 			s, err := src.src.Play(item.ID, ep.ID)
 			if err != nil {
 				log.Printf("codie play: resolve failed: %v", err)
 				a.post(func() {
+					a.codieBusy = ""
 					a.page = pagePlay
 					a.playing = playing{item: item, ep: ep, at: at}
-					a.playerErr = videoProblem(err, i18n.T("This episode won\u2019t play"))
+					a.playerErr = videoProblem(err, i18n.T("This episode won’t play"))
 				})
 				return
 			}
 			log.Printf("codie play: resolved (%s, audio=%v)", s.Type, s.AudioURL != "")
 			// 转码和上传都在这条 goroutine 上,主线程只收结果。
-			go a.playEpisodeOnDevice(item, ep, at, s)
+			a.playEpisodeOnDevice(item, ep, at, s, resumeAt)
 		}()
 		return
 	}
-	a.lib.watch(item, ep, at, 0, 0, false)
+	a.lib.Watch(item, ep, at, 0, 0, false)
 	go func() {
 		s, err := src.src.Play(item.ID, ep.ID)
 		if err != nil {
+			log.Printf("play %s/%s: %v", item.Source, item.ID, err)
+			if macBlocked(err) {
+				a.post(func() {
+					a.macRetry = func() { a.playEpisode(item, ep, at) }
+					a.playerErr = videoProblem(err, i18n.T("This episode won’t play"))
+				})
+				return
+			}
 			a.post(func() { a.playerErr = videoProblem(err, i18n.T("This episode won\u2019t play")) })
 			return
 		}
 		p, file, err := openEpisodeStream(s)
 		a.post(func() {
-			if a.playing.item.ID != item.ID || a.playing.ep.ID != ep.ID || a.page != pagePlay {
+			if a.playing.item.ID != item.ID || a.playing.at != at || a.page != pagePlay {
 				if file != "" {
 					go os.Remove(file)
 				}
@@ -569,15 +990,17 @@ func (a *app) recordPlayProgress() {
 	var pos, dur float64
 	done := false
 	if a.deviceOutput {
+		// The device's clock is the file's, which runs rate times faster
+		// than the story; what's kept of the story is story time.
 		p, d := a.codieTimes()
-		pos, dur = p.Seconds(), d.Seconds()
+		pos, dur = p.Seconds()*a.rate, d.Seconds()*a.rate
 	} else if p := a.player; p != nil && p.Ready() && p.Err() == nil {
 		pos, dur = p.Position().Seconds(), p.Duration().Seconds()
 	}
 	if dur > 0 && pos >= dur-1.5 {
 		done = true
 	}
-	a.lib.watch(a.playing.item, a.playing.ep, a.playing.at, pos, dur, done)
+	a.lib.Watch(a.playing.item, a.playing.ep, a.playing.at, pos, dur, done)
 }
 
 // startWatchTicker records the progress now and again, for an episode that
@@ -608,11 +1031,13 @@ func (a *app) stopWatchTicker() {
 // startNextCountdown counts the seconds to the next episode, showing them on
 // the stage, and plays it when they run out.
 func (a *app) startNextCountdown() {
-	if a.nextTimer != nil || !a.hasEpisode(1) || a.settings.NoAutoNext {
+	if a.nextTimer != nil || !a.hasEpisode(1) || a.settings == nil || a.settings.NoAutoNext {
 		return
 	}
 	a.nextLeft = 8
-	a.win.Invalidate()
+	if a.win != nil {
+		a.win.Invalidate()
+	}
 	a.nextTimer = time.AfterFunc(time.Second, func() { a.post(a.tickNext) })
 }
 
@@ -642,20 +1067,27 @@ func (a *app) cancelNext() {
 	a.nextLeft = 0
 }
 
-// nextEpisode opens the episode after the one playing, or the one before.
+// nextEpisode opens the episode after the one playing, or the one before; when
+// a playlist queue is playing and the current video has no more episodes in
+// that direction, it moves on to the next or previous video in the playlist.
 func (a *app) nextEpisode(back bool) {
-	d := a.detail
-	if d == nil {
-		return
-	}
-	at := a.playing.at + 1
+	dir := 1
 	if back {
-		at = a.playing.at - 1
+		dir = -1
 	}
-	if at < 0 || at >= len(d.Episodes) {
-		return
+	if d := a.detail; d != nil {
+		at := a.playing.at + dir
+		if at >= 0 && at < len(d.Episodes) {
+			a.playEpisode(d.Item, d.Episodes[at], at)
+			return
+		}
 	}
-	a.playEpisode(d.Item, d.Episodes[at], at)
+	if len(a.queue) > 1 {
+		qat := a.queueAt + dir
+		if qat >= 0 && qat < len(a.queue) {
+			a.playQueueAt(qat)
+		}
+	}
 }
 
 // stopPlayer ends what plays, and its file — here or on the device.
@@ -679,9 +1111,16 @@ func (a *app) stopPlayer() {
 
 // setRate plays the episode at r times the usual speed, now and from now on.
 func (a *app) setRate(r float64) {
+	old := a.rate
 	a.rate = r
 	a.settings.Rate = r
 	a.saveSettingsSoon()
+	// On the device the pace is baked into the file, so a change means the
+	// episode plays again at the new one, from where the story is.
+	if a.deviceOutput && a.codie != nil && a.codieSession != "" && r != old {
+		go a.codieRespeed(old, r)
+		return
+	}
 	if p := a.player; p != nil {
 		p.SetRate(r)
 	}
@@ -726,6 +1165,14 @@ func videoProblem(err error, msg string) string {
 	return msg + ": " + err.Error()
 }
 
+// macBlocked says whether an error is macOS standing between a plugin and
+// the program it started — its "operation not permitted", which a fresh ask
+// may be allowed past. The plugin's answer carries the message alone, so
+// the words are what there is to go by.
+func macBlocked(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "operation not permitted")
+}
+
 // settings is what the app keeps of the viewer's.
 type settings struct {
 	Source string `json:"source,omitempty"`
@@ -737,6 +1184,10 @@ type settings struct {
 	// NoAutoNext stops the next episode from coming on its own when one
 	// ends.
 	NoAutoNext bool `json:"noAutoNext,omitempty"`
+	// ConversationControl lets the paired codie device's talk move the
+	// playback: what the viewer says to it ("next one", "play …") lands
+	// here as tool calls.
+	ConversationControl bool `json:"conversationControl,omitempty"`
 	// SearchHistory is the last queries, newest first, as chips under the
 	// search field.
 	SearchHistory []string `json:"searchHistory,omitempty"`
@@ -748,6 +1199,19 @@ type settings struct {
 	DisabledPlugins []string `json:"disabledPlugins,omitempty"`
 	// Appearance is the palette the app draws with: system, dark or light.
 	Appearance string `json:"appearance,omitempty"`
+	// Proxy is the HTTP proxy the app's asks to the world go through,
+	// "10.0.0.14:7890" or "http://10.0.0.14:7890", empty for none. The
+	// paired device and the intranet behind it stay direct however it is.
+	Proxy string `json:"proxy,omitempty"`
+	// LocalFolders are the folders the local source plays, each one a group,
+	// in the order the viewer added them.
+	LocalFolders []string `json:"localFolders,omitempty"`
+	// DisabledSources are the built-in sources turned off. Huangguo starts off:
+	// it ships with the app, and comes on from the settings when wanted.
+	DisabledSources []string `json:"disabledSources,omitempty"`
+	// SourcesChosen marks a settings file that names its sources, so a first
+	// run can start Huangguo off without turning it off again later.
+	SourcesChosen bool `json:"sourcesChosen,omitempty"`
 	// Language is what the app's words read in: system, en or zh-CN.
 	Language string `json:"language,omitempty"`
 	path     string
@@ -766,6 +1230,13 @@ func loadSettings() *settings {
 	s.path = filepath.Join(userDataDir(""), "settings.json")
 	if b, err := os.ReadFile(s.path); err == nil {
 		json.Unmarshal(b, s)
+	}
+	// A first run starts the built-in Huangguo off. It still ships with the
+	// app, and the settings turn it on.
+	if !s.SourcesChosen {
+		s.DisabledSources = append(s.DisabledSources, "huangguo")
+		s.SourcesChosen = true
+		s.save()
 	}
 	return s
 }

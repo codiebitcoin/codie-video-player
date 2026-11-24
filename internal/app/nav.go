@@ -38,7 +38,12 @@ func (a *app) back() {
 		a.drawerOpen, a.speedOpen = false, false
 		a.playerErr = ""
 		a.playing = playing{}
-		a.page = pageDetail
+		if a.detailOf == "" {
+			a.page = pageList
+			a.detail = nil
+		} else {
+			a.page = pageDetail
+		}
 		return
 	}
 	if a.page == pageDetail {
@@ -51,6 +56,7 @@ func (a *app) back() {
 		a.drawerOpen = false
 		a.page = pageList
 		a.detail = nil
+		a.detailOf = ""
 	}
 }
 

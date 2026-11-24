@@ -30,13 +30,11 @@ type pairState struct {
 	err       string
 }
 
-// codiePath is where the paired device's credential is kept.
+// codiePath is where the paired device's credential is kept — with the rest
+// of the app's own, so a run that only exists to be looked at keeps its
+// pairing to itself too.
 func codiePath() string {
-	dir, err := mygo.App.Path(mygo.PathUserData)
-	if err != nil {
-		dir = ""
-	}
-	return filepath.Join(dir, "codie.json")
+	return filepath.Join(userDataDir(""), "codie.json")
 }
 
 // loadCodie brings back the device paired before, if there was one.
@@ -50,6 +48,8 @@ func (a *app) loadCodie() {
 		return
 	}
 	a.codie = codieout.New(&creds)
+	a.syncDeviceSlot()
+	a.toolsRefresh()
 }
 
 // saveCodie keeps the credential, or forgets it with the device.
@@ -293,6 +293,7 @@ func (a *app) deviceConfirmPair() {
 			a.codie = codieout.New(creds)
 			a.saveCodie(creds)
 			a.pair.challenge, a.pair.code, a.pair.err = "", "", ""
+			a.toolsRefresh()
 			a.deviceProbe()
 		})
 	}()
@@ -332,6 +333,7 @@ func (a *app) deviceProbe() {
 func (a *app) deviceForget() {
 	a.stopPlayer()
 	a.codie = nil
+	a.toolsRefresh()
 	a.saveCodie(nil)
 	a.probe, a.deviceNote = nil, ""
 }

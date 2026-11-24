@@ -6,3 +6,7 @@ data/
 
 # macOS
 .DS_Store
+
+# web 版
+front/node_modules/
+front/dist/

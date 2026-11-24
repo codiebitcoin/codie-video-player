@@ -132,8 +132,14 @@ func (a *app) setFullscreen(on bool) {
 // toggleFullscreen flips the window between the screen and its own size.
 func (a *app) toggleFullscreen() { a.setFullscreen(!a.fullscreen) }
 
-// playPause answers the play/pause of what plays here.
+// playPause answers the play/pause of what plays here — or, when the
+// picture is on the device, of what plays there.
 func (a *app) playPause() {
+	if a.deviceOutput && a.codie != nil {
+		a.codiePlayPause()
+		a.wakeControls()
+		return
+	}
 	p := a.player
 	if p == nil {
 		return
@@ -148,8 +154,23 @@ func (a *app) playPause() {
 	a.win.Invalidate()
 }
 
-// seekBy moves the episode on by d seconds, for the arrow keys.
+// seekBy moves the episode on by d seconds, for the arrow keys — here or on
+// the device alike.
 func (a *app) seekBy(d time.Duration) {
+	if a.deviceOutput && a.codie != nil {
+		pos, dur := a.codieTimes()
+		ms := pos.Milliseconds() + d.Milliseconds()
+		if ms < 0 {
+			ms = 0
+		}
+		if dur > 0 && ms > dur.Milliseconds()-1000 {
+			ms = dur.Milliseconds() - 1000
+		}
+		a.codieSeek(ms)
+		a.cancelNext()
+		a.wakeControls()
+		return
+	}
 	p := a.player
 	if p == nil || !p.Ready() || p.Err() != nil {
 		return
@@ -166,12 +187,9 @@ func (a *app) seekBy(d time.Duration) {
 	a.wakeControls()
 }
 
-// bumpVolume raises or lowers how loud by d, for the arrow keys.
+// bumpVolume raises or lowers how loud by d, for the arrow keys — the
+// device's loudness when it plays there.
 func (a *app) bumpVolume(d float64) {
-	p := a.player
-	if p == nil {
-		return
-	}
 	v := a.vol + d
 	if v < 0 {
 		v = 0
@@ -179,7 +197,17 @@ func (a *app) bumpVolume(d float64) {
 	if v > 100 {
 		v = 100
 	}
+	if v == a.vol {
+		return
+	}
 	a.setVolume(v)
-	p.SetVolume(a.vol / 100)
+	if a.deviceOutput && a.codie != nil {
+		a.codieVolume(a.vol / 100)
+		a.wakeControls()
+		return
+	}
+	if p := a.player; p != nil {
+		p.SetVolume(a.vol / 100)
+	}
 	a.wakeControls()
 }

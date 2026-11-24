@@ -1550,14 +1550,41 @@ export async function videoPlay({ id, episode }) {
   };
 }
 
-// The chips over the grid: the hottest, and what's new. A chip's page asks
-// Bilibili's own feeds, a page of twenty to each.
+// The chips over the grid: the hottest, and what's new, and — signed in —
+// the viewer's watch later, their favorites folders and the collections they
+// follow, each a chip that lists its videos. A chip's page asks Bilibili's
+// own feeds, a page of twenty to each.
 export async function videoTabs() {
-  return [
+  const tabs = [
     { id: "hot", label: t("Popular") },
     { id: "rank", label: t("Ranking") },
     { id: "new", label: t("Latest") },
   ];
+  if (!signedIn()) return tabs;
+  tabs.push({ id: "watchlater", label: t("Watch Later") });
+  try {
+    const { created, collected } = await folders(true);
+    for (const f of created) tabs.push({ id: `fav:${f.id}`, label: f.title });
+    for (const c of collected) {
+      if (c.type === 21) tabs.push({ id: `season:${c.id}`, label: c.title });
+      else tabs.push({ id: `fav:${c.id}`, label: c.title });
+    }
+  } catch (e) {
+    console.warn(`videoTabs: folders: ${e.message}`);
+  }
+  return tabs;
+}
+
+// One video of a folder or a season, as the grid shows it: dead ones are
+// left out, for they open to nothing.
+function folderVideo(m) {
+  if (!m.bvid || m.attr === 9 || m.title === "已失效视频") return null;
+  return {
+    id: m.bvid,
+    title: clean(m.title),
+    cover: image(m.cover),
+    subtitle: [clean(m.upper?.name), mmss(m.duration)].filter(Boolean).join(" · "),
+  };
 }
 
 // videoList is a page of what a chip lists, pages from one.
@@ -1581,6 +1608,41 @@ export async function videoList({ tab, page }) {
   if (tab === "new") {
     const d = await get("/x/web-interface/dynamic/region", { rid: 0, ps: 20, pn: n });
     return { items: (d.archives || []).map(of), more: n < 50 };
+  }
+  if (tab === "watchlater") {
+    needAccount();
+    if (n > 1) return { items: [], more: false };
+    // The answer is the whole list, whatever was asked.
+    const d = await get("/x/v2/history/toview", {});
+    const list = (d.list || []).filter((v) => v.bvid);
+    return {
+      items: list.map((v) => of({ bvid: v.bvid, title: v.title, pic: v.pic, author: v.owner?.name, duration: v.duration })),
+      more: false,
+    };
+  }
+  if (String(tab).startsWith("fav:")) {
+    needAccount();
+    if (n > 1) return { items: [], more: false };
+    const { medias } = await wholeFolder(String(tab).slice(4));
+    return {
+      items: (medias || []).map(folderVideo).filter(Boolean),
+      more: false,
+    };
+  }
+  if (String(tab).startsWith("season:")) {
+    needAccount();
+    if (n > 1) return { items: [], more: false };
+    const sid = String(tab).slice(7);
+    const items = [];
+    for (let pn = 1; pn <= 50; pn++) {
+      const d = await get("/x/space/fav/season/list", { season_id: sid, pn, ps: 20 });
+      items.push(...(d.medias || []).map(folderVideo).filter(Boolean));
+      if (!d.medias?.length || (d.medias?.length || 0) < 20 || items.length >= (d.info?.media_count || 0)) break;
+    }
+    return {
+      items,
+      more: false,
+    };
   }
   throw fail("unsupported", "no such page");
 }

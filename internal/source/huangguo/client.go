@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"codie-video-player/internal/proxy"
 )
 
 // Base is the site the client asks. Tests point it at a test server.
@@ -34,7 +36,18 @@ var (
 	imageIV  = []byte("97b60394abc2fbe1")
 )
 
-var httpc = &http.Client{Timeout: 30 * time.Second}
+var httpc = &http.Client{
+	Timeout:   30 * time.Second,
+	Transport: proxiedTransport(),
+}
+
+// proxiedTransport is the client's ways: the default's, with the app's HTTP
+// proxy in front of what it asks, the local addresses excepted.
+func proxiedTransport() http.RoundTripper {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = proxy.Func
+	return t
+}
 
 // Item is a drama as the lists show it.
 type Item struct {

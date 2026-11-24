@@ -11,21 +11,23 @@ import (
 
 const (
 	// System is the setting of following the system's language: see Resolve.
-	System  = "system"
-	English = "en"
-	Chinese = "zh-CN"
+	System   = "system"
+	English  = "en"
+	Chinese  = "zh-CN"
+	Japanese = "ja"
 )
 
 // Languages are those the viewer can choose, each named in itself.
 var Languages = []struct{ Code, Name string }{
 	{English, "English"},
 	{Chinese, "简体中文"},
+	{Japanese, "日本語"},
 }
 
 // Resolve is the language to speak for a setting: the one chosen, or for System,
 // the first of those the system prefers that the app has, or else English.
 func Resolve(setting string, preferred []string) string {
-	if setting == English || setting == Chinese {
+	if setting == English || setting == Chinese || setting == Japanese {
 		return setting
 	}
 	for _, tag := range preferred {
@@ -33,6 +35,8 @@ func Resolve(setting string, preferred []string) string {
 		switch base {
 		case "zh":
 			return Chinese
+		case "ja":
+			return Japanese
 		case "en":
 			return English
 		}
@@ -45,7 +49,7 @@ var language atomic.Pointer[string]
 // SetLanguage switches the language of what T returns from now on. A language
 // the app doesn't have is English.
 func SetLanguage(code string) {
-	if code != Chinese {
+	if code != Chinese && code != Japanese {
 		code = English
 	}
 	language.Store(&code)
@@ -61,9 +65,14 @@ func Language() string {
 
 // T returns the text in the viewer's language.
 func T(text string) string {
-	if Language() == Chinese {
+	switch Language() {
+	case Chinese:
 		if zh, ok := zhCN[text]; ok {
 			return zh
+		}
+	case Japanese:
+		if ja, ok := jaJP[text]; ok {
+			return ja
 		}
 	}
 	return text

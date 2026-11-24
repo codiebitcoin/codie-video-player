@@ -10,12 +10,14 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 
+	"codie-video-player/internal/proxy"
 	"codie-video-player/internal/source/huangguo"
 )
 
@@ -28,8 +30,31 @@ var coverReferers = map[string]string{
 }
 
 // coverClient fetches the pictures that don't need the built-in source's
-// ways.
-var coverClient = &http.Client{Timeout: 20 * time.Second}
+// ways, through the app's HTTP proxy when one is set.
+var coverClient = &http.Client{
+	Timeout:   20 * time.Second,
+	Transport: proxyTransport,
+}
+
+// proxyTransport is the default's ways with the app's HTTP proxy in front
+// of what it asks, the device and the intranet excepted. One of it serves
+// every client of the app's own.
+var proxyTransport = func() http.RoundTripper {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = proxy.Func
+	return t
+}()
+
+// proxyEnv is the environment a program the app starts — ffmpeg, ffprobe —
+// fetches its inputs through: the app's HTTP proxy when one is set, ours
+// after the inherited ones so ours win. nil inherits everything as it is.
+func proxyEnv() []string {
+	env := proxy.EnvVars()
+	if len(env) == 0 {
+		return nil
+	}
+	return append(os.Environ(), env...)
+}
 
 // fetchCover brings a cover's bytes home: the built-in source's own through
 // its client, which decrypts what the site keeps scrambled, and the rest

@@ -61,7 +61,7 @@ type release struct {
 
 // latestRelease asks GitHub what the repo's newest release is.
 func latestRelease() (tag, url string, err error) {
-	c := &http.Client{Timeout: 15 * time.Second}
+	c := &http.Client{Timeout: 15 * time.Second, Transport: proxyTransport}
 	req, err := http.NewRequest("GET", updateRepo+"/releases/latest", nil)
 	if err != nil {
 		return "", "", err

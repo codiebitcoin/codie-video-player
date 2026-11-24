@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"codie-video-player/internal/plugin"
 	"codie-video-player/internal/video"
 )
 
@@ -17,16 +18,9 @@ type sourceEntry struct {
 	id   string
 	name string
 	src  video.VideoSource
-	// grant is the plugin whose programs need the listener's yes, when it
-	// hasn't said it yet.
-	grant grantable
-}
-
-// grantable is a plugin that wants to start programs, once the listener says
-// so. It's an interface so the app needn't hold the plugin whole.
-type grantable interface {
-	Grant(on bool) error
-	Granted() bool
+	// plugin is the plugin of a plugin's source, for what's beyond the video
+	// functions: its account, and its sign-in. Built in, it's nil.
+	plugin *plugin.Plugin
 }
 
 // ensureBundledPlugins copies the plugins the app ships with into the

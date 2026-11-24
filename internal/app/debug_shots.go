@@ -1,13 +1,17 @@
 package app
 
 import (
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/egoist/mygo"
 
+	"codie-video-player/internal/codieout"
 	"codie-video-player/internal/i18n"
+	"codie-video-player/internal/video"
 )
 
 // shotHook, when set, drives the app to check its design.
@@ -30,14 +34,23 @@ func init() {
 	shotsMode = true
 	shotHook = func(a *app) {
 		go func() {
+			os.MkdirAll(dir, 0o755)
 			shot := func(w *mygo.Window, name string) {
 				if w == nil {
+					log.Printf("shots: %s: no window", name)
 					return
 				}
 				png, err := w.CapturePage()
-				if err == nil {
-					os.WriteFile(filepath.Join(dir, name+".png"), png, 0o644)
+				if err != nil {
+					log.Printf("shots: %s: %v", name, err)
+					return
 				}
+				full := filepath.Join(dir, name+".png")
+				if err := os.WriteFile(full, png, 0o644); err != nil {
+					log.Printf("shots: %s: write: %v", name, err)
+					return
+				}
+				log.Printf("shots: %s -> %s (%d bytes)", name, full, len(png))
 			}
 			step := func(d time.Duration, fn func()) {
 				time.Sleep(d)
@@ -55,8 +68,8 @@ func init() {
 			time.Sleep(4 * time.Second)
 			shot(a.win, "1-home")
 			step(1, func() {
-				// The walk goes where answers come surely: the plugin source,
-				// whose list is warm, over the built-in one.
+				// The walk goes where answers come surely: Bilibili, after the
+				// default plugin (YouTube) has shown itself first.
 				for i := range a.sources {
 					if a.sources[i].id == "bilibili" {
 						a.useSource("bilibili")
@@ -85,6 +98,49 @@ func init() {
 			time.Sleep(1200 * time.Millisecond)
 			shot(a.win, "4b-playing-clean")
 			step(1, func() {
+				// The device's now-playing card, as it stands while the
+				// picture is on the codie device's screen, alone and then
+				// with its controls (the speed pill among them). A run whose
+				// source gave nothing to play still shows the card, with
+				// whatever the grid found.
+				if a.page != pagePlay {
+					it := video.Item{ID: "shot", Title: "示例短剧"}
+					if len(a.items) > 0 {
+						it = a.items[0]
+					}
+					d := &video.Video{Item: it}
+					for i := 0; i < 12; i++ {
+						d.Episodes = append(d.Episodes, video.Episode{ID: fmt.Sprintf("e%d", i+1)})
+					}
+					a.page = pagePlay
+					a.playing = playing{item: it, ep: video.Episode{ID: "e1", Title: "第1集"}, at: 0}
+					a.detail = d
+				}
+				a.deviceOutput = true
+				a.codie = codieout.New(&codieout.Creds{Addr: "127.0.0.1:1"})
+				a.codieState = &codieout.MediaSessionState{IsPlaying: true, PositionMS: 95_000, DurationMS: 120_000}
+				a.controlsOn = false
+			})
+			time.Sleep(1200 * time.Millisecond)
+			shot(a.win, "4c-device-clean")
+			step(1, func() {
+				a.controlsOn = true
+			})
+			time.Sleep(800 * time.Millisecond)
+			shot(a.win, "4d-device-controls")
+			step(1, func() {
+				// Paired but playing here: the controls still carry the
+				// 本机/codie toggle, so the device is one press away.
+				a.controlsOn = false
+				a.deviceOutput = false
+				a.codieState = nil
+				a.controlsOn = true
+			})
+			time.Sleep(800 * time.Millisecond)
+			shot(a.win, "4e-local-paired")
+			step(1, func() {
+				a.controlsOn = false
+				a.codie = nil
 				a.drawerOpen = true
 			})
 			time.Sleep(1500 * time.Millisecond)

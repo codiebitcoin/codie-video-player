@@ -1,0 +1,13 @@
+services:
+  video:
+    image: ghcr.io/codiebitcoin/codie-video-player:latest
+    container_name: codie-video
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - AUTH_USER=${AUTH_USER}
+      - AUTH_PASS=${AUTH_PASS}
+      - TZ=${TZ:-Asia/Shanghai}
+    volumes:
+      - ./data:/app/data

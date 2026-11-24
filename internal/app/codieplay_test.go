@@ -1,0 +1,408 @@
+package app
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/egoist/mygo/ui"
+
+	"codie-video-player/internal/codieout"
+	"codie-video-player/internal/library"
+	"codie-video-player/internal/video"
+)
+
+func TestCodieFFmpegArgs(t *testing.T) {
+	// The usual speed of a stream already in the device's shape is a plain
+	// copy; any other pace bakes itself in, which no copy can do.
+	s := &video.Stream{URL: "http://x/v.mp4", Type: "mp4"}
+	if got := codieFFmpegArgs(s, 1, true, "out.mp4"); !hasPair(got, "-c", "copy") {
+		t.Errorf("as-is at 1× = %v, want a copy", got)
+	}
+	if got := codieFFmpegArgs(s, 1.5, false, "out.mp4"); hasPair(got, "-c", "copy") {
+		t.Errorf("1.5× = %v, a copy can't change its pace", got)
+	} else if !hasPair(got, "-vf", "setpts=PTS/1.5,scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2") {
+		t.Errorf("1.5× = %v, the picture isn't sped", got)
+	} else if !hasPair(got, "-af", "atempo=1.5") {
+		t.Errorf("1.5× = %v, the sound isn't sped", got)
+	}
+	if got := codieFFmpegArgs(s, 1, false, "out.mp4"); hasStr(got, "setpts") || hasStr(got, "atempo") {
+		t.Errorf("1× transcode = %v, nothing should be sped", got)
+	}
+	// A stream with its sound apart maps the two inputs together.
+	s2 := &video.Stream{URL: "http://x/v.m3u8", AudioURL: "http://x/a.mp3", Type: "hls"}
+	got := codieFFmpegArgs(s2, 1, false, "out.mp4")
+	if !hasPair(got, "-map", "0:v:0") || !hasPair(got, "-map", "1:a:0?") {
+		t.Errorf("apart streams = %v, want both inputs mapped", got)
+	}
+}
+
+func hasPair(args []string, flag, value string) bool {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) && args[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func hasStr(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestCodieResumeStart(t *testing.T) {
+	// A session starts where the story was, in the file's faster clock; a
+	// story barely begun isn't worth resuming.
+	tests := []struct {
+		resumeS, rate float64
+		want          int64
+	}{
+		{0, 1, 0},
+		{5, 1, 0}, // 太短,从头
+		{100, 1, 100000},
+		{100, 2, 50000}, // 2× 的文件里,故事 100 秒在文件 50 秒处
+		{90, 0.5, 180000},
+	}
+	for _, tt := range tests {
+		if got := codieResumeStart(tt.resumeS, tt.rate); got != tt.want {
+			t.Errorf("codieResumeStart(%v, %v) = %d, want %d", tt.resumeS, tt.rate, got, tt.want)
+		}
+	}
+}
+
+func TestCodieEndedStartsNext(t *testing.T) {
+	// When the device's episode plays out, the next one counts in, the way
+	// the local player's own end does; a pause before the end doesn't.
+	a := toolApp(t)
+	a.playing = playing{item: video.Item{ID: "d1"}, ep: video.Episode{ID: "ep1"}, at: 0}
+	a.detail = &video.Video{Item: video.Item{ID: "d1"}, Episodes: []video.Episode{
+		{ID: "ep1"}, {ID: "ep2"},
+	}}
+	t.Cleanup(a.cancelNext)
+
+	a.codieState = &codieout.MediaSessionState{IsPlaying: true, PositionMS: 119000, DurationMS: 120000}
+	a.codieEnded()
+	if a.nextLatch || a.nextLeft != 0 {
+		t.Error("still playing, but the countdown came")
+	}
+	a.codieState = &codieout.MediaSessionState{IsPlaying: false, PositionMS: 30000, DurationMS: 120000}
+	a.codieEnded()
+	if a.nextLatch || a.nextLeft != 0 {
+		t.Error("paused halfway, but the countdown came")
+	}
+	a.codieState = &codieout.MediaSessionState{IsPlaying: false, PositionMS: 119500, DurationMS: 120000}
+	a.codieEnded()
+	if !a.nextLatch || a.nextLeft != 8 {
+		t.Errorf("played out: latch=%v left=%d, want the countdown at 8", a.nextLatch, a.nextLeft)
+	}
+	a.codieEnded() // 已 latch,不再重来
+	if a.nextLeft != 8 || a.nextTimer == nil {
+		t.Error("the countdown restarted")
+	}
+}
+
+func TestDeviceShortcuts(t *testing.T) {
+	// The keys answer the device's session when the picture is there:
+	// space pause/resume, arrows seek and volume.
+	a := toolApp(t)
+	a.deviceOutput, a.codie = true, codieout.New(&codieout.Creds{Addr: "127.0.0.1:1"})
+	a.codieSession = "s1"
+	a.codieState = &codieout.MediaSessionState{IsPlaying: false}
+	a.vol = 40
+	var got []string
+	old := codieMediaAction
+	codieMediaAction = func(c *codieout.Client, session, action string, args map[string]any) {
+		got = append(got, action+":"+fmt.Sprint(args["position_ms"], args["volume"]))
+	}
+	t.Cleanup(func() { codieMediaAction = old })
+
+	a.playPause()
+	a.seekBy(5 * time.Second)
+	a.seekBy(-10 * time.Second)
+	a.bumpVolume(5)
+	a.bumpVolume(-50) // 到 0 为止
+	joined := strings.Join(got, " ")
+	if !strings.Contains(joined, "resume") {
+		t.Errorf("space on a paused session = %q, want resume", joined)
+	}
+	if !strings.Contains(got[1], "5000") || !strings.Contains(got[2], "0") {
+		t.Errorf("arrow seeks = %q, want +5s then clamped to 0", joined)
+	}
+	if !strings.Contains(got[3], "0.45") || !strings.Contains(got[4], "0") {
+		t.Errorf("arrow volumes = %q, want 45 then floored at 0", joined)
+	}
+	if a.vol != 0 {
+		t.Errorf("vol = %v, want 0 after the floor", a.vol)
+	}
+}
+
+func TestRecordProgressInStoryTime(t *testing.T) {
+	// What's kept of a sped-up episode is story time, not the file's
+	// faster clock: at 2×, half the file is the whole story so far.
+	a := toolApp(t)
+	a.lib = &library.Library{}
+	a.deviceOutput = true
+	a.rate = 2
+	a.playing = playing{item: video.Item{ID: "d1", Title: "测试剧"}, ep: video.Episode{ID: "ep1", Title: "第1集"}, at: 0}
+	a.codieState = &codieout.MediaSessionState{IsPlaying: true, PositionMS: 60_000, DurationMS: 120_000}
+	a.recordPlayProgress()
+	if len(a.lib.History) != 1 {
+		t.Fatalf("nothing recorded: %d entries", len(a.lib.History))
+	}
+	if got := a.lib.History[0].Pos; got != 120 {
+		t.Errorf("pos = %v of the story, want 120", got)
+	}
+	if got := a.lib.History[0].Dur; got != 240 {
+		t.Errorf("dur = %v of the story, want 240", got)
+	}
+}
+
+func TestOutputToggleClicksTarget(t *testing.T) {
+	// Clicking "codie" while on Local switches to the device, and clicking
+	// "Local" while on the device switches back.
+	a := toolApp(t)
+	a.codie = codieout.New(&codieout.Creds{Addr: "127.0.0.1:1"})
+	a.deviceOutput = false
+	tester := ui.NewTester(func(c *ui.Context) {
+		a.outputToggle(c)
+	}, 400, 80)
+	if err := tester.Click("codie"); err != nil {
+		t.Fatalf("Click(codie): %v", err)
+	}
+	if !a.deviceOutput {
+		t.Fatal("deviceOutput remained false after clicking codie")
+	}
+	if err := tester.Click("Local"); err != nil {
+		t.Fatalf("Click(Local): %v", err)
+	}
+	if a.deviceOutput {
+		t.Fatal("deviceOutput remained true after clicking Local")
+	}
+}
+
+func TestSidebarClickFromDetailReturnsToList(t *testing.T) {
+	a := toolApp(t)
+	a.favOpen = true
+	a.tabs = []video.Tab{
+		{ID: "hot", Label: "Popular"},
+		{ID: "fav:100", Label: "默认收藏夹"},
+	}
+	a.tabID = "hot"
+	a.items = []video.Item{{ID: "BV1", Title: "First"}}
+	a.page = pageDetail
+	a.detailOf = "BV1"
+	a.detail = &video.Video{Item: video.Item{ID: "BV1", Title: "First"}}
+
+	tester := ui.NewTester(func(c *ui.Context) {
+		a.navTabs(c)
+	}, 260, 400)
+	// Re-clicking the already active tab while in detail page must return to pageList.
+	if err := tester.Click("Popular"); err != nil {
+		t.Fatalf("Click(Popular): %v", err)
+	}
+	if a.page != pageList {
+		t.Fatalf("page = %v, want pageList after clicking current tab from detail", a.page)
+	}
+	if len(a.fwd) != 1 || a.fwd[0].detailOf != "BV1" {
+		t.Fatalf("forward stack = %+v, want detail BV1 saved", a.fwd)
+	}
+
+	// Re-enter detail page, then click a favorites playlist tab in the sidebar.
+	a.page = pageDetail
+	a.detailOf = "BV1"
+	a.detail = &video.Video{Item: video.Item{ID: "BV1", Title: "First"}}
+	if err := tester.Click("默认收藏夹"); err != nil {
+		t.Fatalf("Click(默认收藏夹): %v", err)
+	}
+	if a.page != pageList || a.tabID != "fav:100" {
+		t.Fatalf("page=%v tabID=%q, want pageList and fav:100", a.page, a.tabID)
+	}
+}
+
+func TestPlaylistSearchAndQueuePlayback(t *testing.T) {
+	a := toolApp(t)
+	a.tabs = []video.Tab{
+		{ID: "hot", Label: "Popular"},
+		{ID: "fav:100", Label: "默认收藏夹"},
+		{ID: "season:200", Label: "编程合集"},
+	}
+	a.tabID = "fav:100"
+	a.items = []video.Item{
+		{ID: "BV1", Title: "Go 语言实战", Subtitle: "UP主A"},
+		{ID: "BV2", Title: "Rust 入门", Subtitle: "UP主B"},
+		{ID: "BV3", Title: "Go 并发编程", Subtitle: "UP主A"},
+	}
+
+	// 1. Search within playlist filters items by title/subtitle.
+	a.playlistQuery = "rust"
+	got := a.playlistItems()
+	if len(got) != 1 || got[0].ID != "BV2" {
+		t.Fatalf("playlistItems(rust) = %+v, want [BV2]", got)
+	}
+	a.playlistQuery = ""
+
+	// 2. Global playlist search matches playlist tabs by name.
+	pls := a.matchingPlaylists("默认")
+	if len(pls) != 1 || pls[0].ID != "fav:100" {
+		t.Fatalf("matchingPlaylists(默认) = %+v, want [fav:100]", pls)
+	}
+
+	// 3. Playing a playlist queues its items and steps across videos when an episode ends.
+	a.playPlaylist(a.items, 0, false)
+	if a.page != pagePlay || a.playing.item.ID != "BV1" || len(a.queue) != 3 || a.queueAt != 0 {
+		t.Fatalf("after playPlaylist: page=%v playing=%s queue=%d queueAt=%d", a.page, a.playing.item.ID, len(a.queue), a.queueAt)
+	}
+	// Single-episode video in playlist still has next episode via the playlist queue.
+	a.detail = &video.Video{
+		Item:     a.items[0],
+		Episodes: []video.Episode{{ID: "BV1", Title: "Go 语言实战"}},
+	}
+	if !a.hasEpisode(1) {
+		t.Fatal("hasEpisode(1) = false on first item of 3-video playlist, want true")
+	}
+	if a.hasEpisode(-1) {
+		t.Fatal("hasEpisode(-1) = true on first item of playlist, want false")
+	}
+	a.nextEpisode(false)
+	if a.playing.item.ID != "BV2" || a.queueAt != 1 {
+		t.Fatalf("after nextEpisode(false): playing=%s queueAt=%d, want BV2 at 1", a.playing.item.ID, a.queueAt)
+	}
+	if !a.hasEpisode(-1) {
+		t.Fatal("hasEpisode(-1) = false on second item of playlist, want true")
+	}
+	a.nextEpisode(true)
+	if a.playing.item.ID != "BV1" || a.queueAt != 0 {
+		t.Fatalf("after nextEpisode(true): playing=%s queueAt=%d, want BV1 at 0", a.playing.item.ID, a.queueAt)
+	}
+}
+
+func TestDetailInlineSlotSelectAndDirectPlayOnCodie(t *testing.T) {
+	a := toolApp(t)
+	a.codie = codieout.New(&codieout.Creds{Addr: "127.0.0.1:1"})
+	a.page = pageDetail
+	a.detail = &video.Video{
+		Item:     video.Item{ID: "BV1", Title: "Demo"},
+		Episodes: []video.Episode{{ID: "BV1", Title: "P1"}},
+	}
+	tester := ui.NewTester(func(c *ui.Context) {
+		a.detailActions(c, a.detail)
+	}, 640, 140)
+	// Choose Slot 5 inline on the detail page.
+	if err := tester.Click("Slot 5"); err != nil {
+		t.Fatalf("Click(Slot 5): %v", err)
+	}
+	if a.slotChoice != 5 {
+		t.Fatalf("slotChoice = %d, want 5", a.slotChoice)
+	}
+	// Clicking "Play on codie" starts playback on codie immediately without any modal confirmation.
+	if err := tester.Click("Play on codie"); err != nil {
+		t.Fatalf("Click(Play on codie): %v", err)
+	}
+	if !a.deviceOutput || a.page != pagePlay || a.playing.item.ID != "BV1" {
+		t.Fatalf("after Play on codie: deviceOutput=%v page=%v playing=%q", a.deviceOutput, a.page, a.playing.item.ID)
+	}
+}
+
+func TestCodieMultiSegmentAndPlaylistQueueCompatibility(t *testing.T) {
+	a := toolApp(t)
+	a.codie = codieout.New(&codieout.Creds{Addr: "127.0.0.1:1"})
+	a.deviceOutput = true
+	t.Cleanup(a.cancelNext)
+
+	// Set up a 2-video playlist queue where the first video (BV1) is split into
+	// 2 segments of 10 minutes (600,000 ms) each.
+	items := []video.Item{
+		{ID: "BV1", Title: "长视频1"},
+		{ID: "BV2", Title: "长视频2"},
+	}
+	a.setQueue(items, 0, "默认收藏夹")
+	a.playing = playing{item: items[0], ep: video.Episode{ID: "BV1", Title: "长视频1"}, at: 0}
+	a.detail = &video.Video{Item: items[0], Episodes: []video.Episode{{ID: "BV1", Title: "长视频1"}}}
+	a.codieSegs = []codieSegment{
+		{path: "seg0.mp4", startMS: 0, durMS: 600_000},
+		{path: "seg1.mp4", startMS: 600_000, durMS: 600_000},
+	}
+	a.codieSegAt = 0
+	a.codieTotalMS = 1_200_000
+	a.codieSession = "sess-seg0"
+
+	opened := make(chan string, 4)
+	oldOpen := codieOpenSessionFn
+	codieOpenSessionFn = func(c *codieout.Client, path string, req codieout.MediaSessionRequest) (string, error) {
+		start := int64(0)
+		if req.Playback != nil {
+			start = req.Playback.StartPositionMS
+		}
+		tag := fmt.Sprintf("%s@%d", path, start)
+		opened <- tag
+		return "sess-" + path, nil
+	}
+	t.Cleanup(func() { codieOpenSessionFn = oldOpen })
+
+	// 1. Segment 0 ends: codieEnded must NOT start the 8-second next-episode
+	// countdown; it must seamlessly switch to segment 1.
+	a.codieState = &codieout.MediaSessionState{IsPlaying: false, PositionMS: 599_500, DurationMS: 600_000}
+	a.codieEnded()
+	if a.nextLatch || a.nextLeft != 0 {
+		t.Fatalf("segment 0 ended: nextLatch=%v nextLeft=%d, want no next-episode countdown yet", a.nextLatch, a.nextLeft)
+	}
+	select {
+	case got := <-opened:
+		if got != "seg1.mp4@0" {
+			t.Fatalf("opened segment = %q, want seg1.mp4@0", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for segment 1 to open")
+	}
+	// Wait briefly for apply() to finish on the goroutine.
+	for i := 0; i < 50 && a.codieSegAt != 1; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if a.codieSegAt != 1 || a.codieSession != "sess-seg1.mp4" {
+		t.Fatalf("after segment switch: segAt=%d session=%q", a.codieSegAt, a.codieSession)
+	}
+
+	// 2. Unified timeline on segment 1: 150s into segment 1 is 750s / 1200s total.
+	a.codieState = &codieout.MediaSessionState{IsPlaying: true, PositionMS: 150_000, DurationMS: 600_000}
+	pos, dur := a.codieTimes()
+	if pos != 750*time.Second || dur != 1200*time.Second {
+		t.Fatalf("codieTimes on seg 1 = (%v, %v), want (750s, 1200s)", pos, dur)
+	}
+
+	// 3. Cross-segment seek back to 100s (in segment 0) switches back to seg0.mp4@100000.
+	a.codieSeek(100_000)
+	select {
+	case got := <-opened:
+		if got != "seg0.mp4@100000" {
+			t.Fatalf("cross-segment seek opened = %q, want seg0.mp4@100000", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for cross-segment seek")
+	}
+	for i := 0; i < 50 && a.codieSegAt != 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 4. Advance to last segment (seg 1) and finish it: now the whole episode is
+	// done, so codieEnded must trigger the countdown to the next playlist video (BV2).
+	a.codieSegAt = 1
+	a.codieState = &codieout.MediaSessionState{IsPlaying: false, PositionMS: 599_500, DurationMS: 600_000}
+	a.codieEnded()
+	if !a.nextLatch || a.nextLeft != 8 {
+		t.Fatalf("last segment ended: nextLatch=%v nextLeft=%d, want countdown to next playlist item", a.nextLatch, a.nextLeft)
+	}
+	a.nextEpisode(false)
+	if a.playing.item.ID != "BV2" || a.queueAt != 1 {
+		t.Fatalf("after nextEpisode from split video: playing=%q queueAt=%d, want BV2 at 1", a.playing.item.ID, a.queueAt)
+	}
+}
+
+
+
+

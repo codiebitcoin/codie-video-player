@@ -94,9 +94,48 @@ func (c *Client) CreateMediaSession(path string, req MediaSessionRequest) (strin
 	buf.WriteString("\r\n--" + boundary + "--\r\n")
 	raw, err := c.Call("POST", apiMedia+"/sessions", buf.Bytes(), payloadMultipart, "multipart/form-data; boundary="+boundary)
 	if err != nil {
-		return "", err
+		// The output is taken: something holds the screen. Free it and ask
+		// once more, so a play that arrives while another holds the screen
+		// still lands.
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Code == "MEDIA_SESSION_BLOCKED" && c.releaseOutput() {
+			raw, err = c.Call("POST", apiMedia+"/sessions", buf.Bytes(), payloadMultipart, "multipart/form-data; boundary="+boundary)
+		}
+		if err != nil {
+			return "", err
+		}
 	}
 	return mediaSessionID(raw)
+}
+
+// releaseOutput frees the screen: every session the device still holds is
+// closed. It says whether it closed any, which is the only case worth
+// asking again.
+func (c *Client) releaseOutput() bool {
+	raw, err := c.Call("GET", apiMedia+"/sessions", nil, payloadEmpty, "")
+	if err != nil {
+		return false
+	}
+	var env struct {
+		Data struct {
+			Sessions []struct {
+				SessionID string `json:"session_id"`
+			} `json:"sessions"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &env) != nil || len(env.Data.Sessions) == 0 {
+		return false
+	}
+	freed := false
+	for _, s := range env.Data.Sessions {
+		if s.SessionID == "" {
+			continue
+		}
+		if c.CloseMediaSession(s.SessionID) == nil {
+			freed = true
+		}
+	}
+	return freed
 }
 
 // MediaAction drives a session: pause, resume, seek, set_volume, set_muted

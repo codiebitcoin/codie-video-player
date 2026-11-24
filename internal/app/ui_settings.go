@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"codie-video-player/internal/i18n"
+	"codie-video-player/internal/proxy"
 )
 
 // The settings window: how the episode plays, what the app keeps, the
@@ -23,15 +25,15 @@ func (a *app) openSettingsWindow() {
 		return
 	}
 	a.settingsWin = mygo.NewWindow(mygo.WindowOptions{
-		Title:           i18n.T("Settings — Codie Video"),
-		Width:           560,
-		Height:          640,
-		MinWidth:        460,
-		MinHeight:       420,
-		TitleBarStyle:      mygo.TitleBarHidden,
-		HideWindowButtons:  true, // the window closes by its own cross
-		BackgroundColor:    "#141416",
-		Content:            ui.View(a.settingsContent),
+		Title:             i18n.T("Settings — Codie Video"),
+		Width:             560,
+		Height:            640,
+		MinWidth:          460,
+		MinHeight:         420,
+		TitleBarStyle:     mygo.TitleBarHidden,
+		HideWindowButtons: true, // the window closes by its own cross
+		BackgroundColor:   "#141416",
+		Content:           ui.View(a.settingsContent),
 	})
 	a.settingsWin.OnClose(func(e *mygo.CloseEvent) {
 		// It goes when it closes; the next open makes it again.
@@ -73,7 +75,7 @@ func (a *app) settingsContent(c *ui.Context) {
 						ui.Row(c).Gap(6).Children(func() {
 							for _, an := range appearanceNames {
 								chosen := a.settings.Appearance == an.id
-								b := ui.ButtonBase(c.Key("ap"+an.id)).Height(26).PaddingX(10).Radius(999).Center().
+								b := ui.ButtonBase(c.Key("ap" + an.id)).Height(26).PaddingX(10).Radius(999).Center().
 									FocusRing(false).Label(i18n.T(an.key))
 								if chosen {
 									b.Background(colors.accent).TextColor(colors.onAccent)
@@ -97,7 +99,7 @@ func (a *app) settingsContent(c *ui.Context) {
 						ui.Row(c).Gap(6).Children(func() {
 							for _, ln := range languageNames() {
 								chosen := a.settings.Language == ln.id
-								b := ui.ButtonBase(c.Key("lang"+ln.id)).Height(26).PaddingX(10).Radius(999).Center().
+								b := ui.ButtonBase(c.Key("lang" + ln.id)).Height(26).PaddingX(10).Radius(999).Center().
 									FocusRing(false).Label(ln.key)
 								if chosen {
 									b.Background(colors.accent).TextColor(colors.onAccent)
@@ -130,7 +132,7 @@ func (a *app) settingsContent(c *ui.Context) {
 						ui.Row(c).Gap(6).Children(func() {
 							for _, r := range rates {
 								chosen := a.rate == r
-								b := ui.ButtonBase(c.Key("dr"+rateLabel(r))).Height(26).PaddingX(10).Radius(999).Center().
+								b := ui.ButtonBase(c.Key("dr" + rateLabel(r))).Height(26).PaddingX(10).Radius(999).Center().
 									FocusRing(false).Label(rateLabel(r))
 								if chosen {
 									b.Background(colors.accent).TextColor(colors.onAccent)
@@ -148,6 +150,41 @@ func (a *app) settingsContent(c *ui.Context) {
 					})
 					a.settingsRow(c, i18n.T("Volume"), i18n.T("Remembers where the last run left it"), func() {
 						ui.Slider(c.Key("vol"), &a.vol, 0, 100).Width(160)
+					})
+				})
+				a.settingsSection(c, i18n.T("Network"), func() {
+					a.settingsRow(c, i18n.T("HTTP Proxy"), i18n.T("The app's asks go through it; the device and the intranet stay direct"), func() {
+						in := ui.TextInputBase(c.Key("proxy"), &a.settings.Proxy).Width(190).FontSize(12.5).
+							Placeholder(i18n.T("e.g. 10.0.0.14:7890"))
+						if in.Submitted() {
+							proxy.Set(a.settings.Proxy)
+							a.settings.save()
+						}
+					})
+				})
+				a.settingsSection(c, i18n.T("Device"), func() {
+					on := a.settings.ConversationControl
+					desc := i18n.T("What the viewer says to the device (“next one”, “pause”, “play …”) moves the playback here")
+					if a.codie == nil {
+						desc = i18n.T("Pair a device first; then its talk can move the playback here")
+					}
+					a.settingsRow(c, i18n.T("Conversation Control"), desc, func() {
+						if ui.Switch(c.Key("conv-control"), &on).Changed() {
+							a.settings.ConversationControl = on
+							a.settings.save()
+							a.toolsRefresh()
+						}
+					})
+					if n := a.toolsCalls(); n > 0 {
+						a.settingsRow(c, i18n.T("Tool Calls Served"), fmt.Sprintf("%d", n), nil)
+					}
+				})
+				a.settingsSection(c, i18n.T("Sources"), func() {
+					on := !a.sourceDisabled("huangguo")
+					a.settingsRow(c, i18n.T("Huangguo Dramas"), i18n.T("Ships with the app; off until you turn it on"), func() {
+						if ui.Switch(c.Key("src-huangguo"), &on).Changed() {
+							a.setSourceDisabled("huangguo", !on)
+						}
 					})
 				})
 				a.settingsSection(c, i18n.T("Plugins"), func() {

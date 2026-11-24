@@ -1,6 +1,7 @@
 package app
 
 import (
+	"log"
 	"strings"
 	"time"
 
@@ -51,6 +52,7 @@ func (a *app) searchAll(q string) {
 				a.gridLoading = false
 				g := searchGroup{id: e.id, name: e.name}
 				if err != nil {
+					log.Printf("search %q in %s: %v", q, e.id, err)
 					g.err = videoProblem(err, i18n.T("Search failed"))
 				} else {
 					g.items = r.Items
@@ -116,3 +118,38 @@ func (a *app) rememberSearch(q string) {
 // suggestDelay is how long the search field waits before it stops showing
 // the last queries, once its words change.
 const suggestDelay = 150 * time.Millisecond
+
+// allPlaylists returns the playlist tabs the showing source knows (favorites
+// folders, saved collections, watch later).
+func (a *app) allPlaylists() []video.Tab {
+	var out []video.Tab
+	for _, t := range a.tabs {
+		if isPlaylistTab(t.ID) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// matchingPlaylists returns the playlist tabs whose names match q. A generic
+// playlist word ("播放列表", "收藏", "playlist") matches all of them.
+func (a *app) matchingPlaylists(q string) []video.Tab {
+	all := a.allPlaylists()
+	needle := strings.ToLower(strings.TrimSpace(q))
+	if needle == "" {
+		return all
+	}
+	for _, kw := range []string{"播放列表", "收藏", "合集", "playlist", "favorite", "プレイリスト"} {
+		if strings.Contains(needle, kw) {
+			return all
+		}
+	}
+	var out []video.Tab
+	for _, t := range all {
+		if strings.Contains(strings.ToLower(t.Label), needle) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+

@@ -85,6 +85,20 @@ function fail(kind, message) {
   return e;
 }
 
+// t is the text in the listener's language, from the plugin's locales.
+const t = (text) => host.t(text);
+
+// playable is a video that can be played here: a live stream, one still
+// coming, or one already over has no stream of its own to hand the player,
+// so it never reaches the grid.
+function playable(e) {
+  if (!e || !e.id) return false;
+  if (e.is_live || e.live_status === "is_live" || e.live_status === "is_upcoming" || e.live_status === "post_live") {
+    return false;
+  }
+  return true;
+}
+
 // itemOf is a card of the grid's for what a search found.
 function itemOf(e) {
   return {
@@ -93,13 +107,55 @@ function itemOf(e) {
     cover: e.thumbnails && e.thumbnails.length
       ? e.thumbnails[e.thumbnails.length - 1].url
       : `https://i.ytimg.com/vi/${e.id}/hqdefault.jpg`,
-    subtitle: mmss(e.duration),
+    subtitle: [e.uploader || e.channel, mmss(e.duration)].filter(Boolean).join(" · "),
   };
 }
 
-// videoTabs: a search-only source says so with none.
+// The chips the sidebar lists, each a search YouTube answers without an
+// account. YouTube took its own trending and category pages down, and what
+// it left of them yt-dlp can't read, so a chip is a search of its own.
+// Live streams aren't listed: they have no stream this player can take.
+const FEEDS = [
+  { id: "hot", label: "Popular", query: "popular videos this week" },
+  { id: "music", label: "Music", query: "official music video" },
+  { id: "gaming", label: "Gaming", query: "gaming" },
+  { id: "news", label: "News", query: "news" },
+  { id: "movies", label: "Movies", query: "movie trailer" },
+];
+
+// feedFresh is how long what a feed gave stands in for its list, so paging
+// a chip doesn't run yt-dlp again for the same one.
+const feedFresh = 120000;
+
+let feedCache = null; // { at, tab, entries }
+
+async function feed(tab) {
+  const chip = FEEDS.find((f) => f.id === tab);
+  if (!chip) throw fail("unsupported", t("no such page"));
+  if (feedCache && feedCache.tab === tab && Date.now() - feedCache.at < feedFresh) {
+    return feedCache.entries;
+  }
+  const j = await ytdlp(["--flat-playlist", "--dump-single-json", `ytsearch100:${chip.query}`]);
+  const entries = (j.entries || []).filter(playable);
+  feedCache = { at: Date.now(), tab, entries };
+  return entries;
+}
+
+// videoTabs: the chips the sidebar lists. Live streams stay out: a live
+// one has no stream this player can take, so it would only fail to play.
 export async function videoTabs() {
-  return [];
+  return FEEDS.map((f) => ({ id: f.id, label: t(f.label) }));
+}
+
+// videoList is a page of what a chip lists, pages cut out of what its feed
+// gave, pages from one.
+export async function videoList({ tab, page }) {
+  const n = Math.max(1, +page || 1);
+  const entries = await feed(String(tab || ""));
+  return {
+    items: entries.slice((n - 1) * PER_PAGE, n * PER_PAGE).map(itemOf),
+    more: n * PER_PAGE < entries.length,
+  };
 }
 
 // videoSearch is page of YouTube's answers to a query, PER_PAGE to a page,
@@ -108,7 +164,7 @@ export async function videoSearch({ query, offset }) {
   const off = Math.max(0, +offset || 0);
   const n = off + PER_PAGE;
   const j = await ytdlp(["--flat-playlist", "--dump-single-json", `ytsearch${n}:${query}`]);
-  const entries = (j.entries || []).filter((e) => e && e.id);
+  const entries = (j.entries || []).filter(playable);
   const items = entries.slice(off, n).map(itemOf);
   return { items, more: entries.length >= n };
 }
@@ -153,6 +209,9 @@ function pick(formats) {
 // the app to join.
 export async function videoPlay({ id }) {
   const j = await ytdlp(["--dump-single-json", url(id)]);
+  if (!playable(j)) {
+    throw fail("unavailable", "live streams can't be played here");
+  }
   const picked = pick(j.formats) || (j.url ? { url: j.url, audioUrl: "", ext: j.ext || "mp4" } : null);
   if (!picked) {
     throw fail("unavailable", "no playable stream for this video");

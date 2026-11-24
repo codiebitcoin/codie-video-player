@@ -9,19 +9,21 @@ import (
 	"testing"
 )
 
-// The catalog holds a translation for every key the app asks for. The test
-// reads the app's calls for T("…") and Tf("…") literals and checks each
-// against zhCN, so a new string can't ship half-translated.
+// The catalogs hold a translation for every key the app asks for, Chinese
+// and Japanese alike. The test reads the app's calls for T("…") and Tf("…")
+// literals and checks each against both, so a new string can't ship
+// half-translated.
 func TestCatalogCoversTheAppsStrings(t *testing.T) {
 	keys := keysFromDir("../app")
 	if len(keys) == 0 {
 		t.Fatal("found no T() keys in the app; the scan broke")
 	}
-	SetLanguage(Chinese)
-	defer SetLanguage(English)
 	for _, k := range keys {
 		if _, ok := zhCN[k]; !ok {
 			t.Errorf("no Chinese for %q", k)
+		}
+		if _, ok := jaJP[k]; !ok {
+			t.Errorf("no Japanese for %q", k)
 		}
 	}
 }
@@ -32,8 +34,14 @@ func TestResolve(t *testing.T) {
 	if got := Resolve("zh-CN", []string{"fr"}); got != Chinese {
 		t.Errorf("Resolve(zh-CN) = %q", got)
 	}
+	if got := Resolve("ja", []string{"en"}); got != Japanese {
+		t.Errorf("Resolve(ja) = %q", got)
+	}
 	if got := Resolve("system", []string{"zh-Hans-CN", "en"}); got != Chinese {
 		t.Errorf("Resolve(system, zh first) = %q", got)
+	}
+	if got := Resolve("system", []string{"ja_JP"}); got != Japanese {
+		t.Errorf("Resolve(system, ja) = %q", got)
 	}
 	if got := Resolve("system", []string{"en_US"}); got != English {
 		t.Errorf("Resolve(system, en) = %q", got)
@@ -43,12 +51,17 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-// T answers the Chinese of a key, and the key itself in English.
+// T answers the Chinese and Japanese of a key, and the key itself in
+// English.
 func TestT(t *testing.T) {
 	SetLanguage(Chinese)
-	defer SetLanguage(English)
 	if got := T("Load More"); got != "加载更多" {
 		t.Errorf("T in Chinese = %q", got)
+	}
+	SetLanguage(Japanese)
+	defer SetLanguage(English)
+	if got := T("Load More"); got != "もっと見る" {
+		t.Errorf("T in Japanese = %q", got)
 	}
 	SetLanguage(English)
 	if got := T("Load More"); got != "Load More" {

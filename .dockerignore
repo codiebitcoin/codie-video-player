@@ -1,0 +1,7 @@
+build/
+data/
+front/node_modules/
+front/dist/
+cmd/web/dist
+.git
+*.md
