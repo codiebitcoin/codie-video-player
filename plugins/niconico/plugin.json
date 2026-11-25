@@ -1,7 +1,7 @@
 {
   "id": "niconico",
   "name": "NicoNico",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minAppVersion": "0.1.22",
   "kind": "video",
   "main": "index.js",
@@ -25,9 +25,15 @@
   },
   "requestHeaders": [
     {
-      "hosts": ["*.nimg.jp"],
-      "kinds": ["image"],
-      "headers": { "Referer": "https://www.nicovideo.jp/" }
+      "hosts": [
+        "*.nimg.jp"
+      ],
+      "kinds": [
+        "image"
+      ],
+      "headers": {
+        "Referer": "https://www.nicovideo.jp/"
+      }
     }
   ]
 }

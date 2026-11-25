@@ -109,6 +109,10 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 
 // codieSegmentSpanS is how much of an episode the first segment holds: short,
 // so the picture comes soon, and the size it made decides the rest's spans.
+// codieStallTicks is how many checks (700ms each) a pass may write nothing
+// before it's taken for dead: 60 seconds of a silent ffmpeg.
+const codieStallTicks = 85
+
 const codieSegmentSpanS = 30
 
 // codieFirstSegmentBytes and codieSegmentBytes are what a segment aims at:
@@ -273,6 +277,8 @@ func (a *app) codieMakeSegment(ctx context.Context, s *video.Stream, rate, fromS
 	cmd.Env = proxyEnv()
 	// 转的过程中说到做到多少 MB,免得界面只剩一个转圈的圈。
 	stop := make(chan struct{})
+	var lastSize int64 = -1
+	idle := 0
 	go func() {
 		tick := time.NewTicker(700 * time.Millisecond)
 		defer tick.Stop()
@@ -282,6 +288,19 @@ func (a *app) codieMakeSegment(ctx context.Context, s *video.Stream, rate, fromS
 				return
 			case <-tick.C:
 				n := fileSize(dst)
+				// 一直不长,就是源头没东西进来:停下来说清楚,别让界面一直转圈。
+				if n == lastSize {
+					idle++
+					if idle >= codieStallTicks {
+						log.Printf("codie play: no data after %ds, giving up", idle/2*700/1000)
+						if cmd.Process != nil {
+							cmd.Process.Kill()
+						}
+						return
+					}
+				} else {
+					idle, lastSize = 0, n
+				}
 				a.post(func() {
 					if a.codieBusy != "" {
 						a.codieBusy = i18n.Tf("Transcoding for the device… %s", megabytes(n))

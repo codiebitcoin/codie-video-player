@@ -330,6 +330,18 @@ func (a *app) makeSources(bundledPlugins embed.FS) {
 	plugin.SetWebSignIn(a.webSignIn)
 	ensureBundledPlugins(bundledPlugins)
 	a.plugins = plugin.Discover(pluginsDir(), userDataDir("plugin-data"))
+	// A plugin that asks to start off does so the first time the app sees it,
+	// which is how adult sources ship. The listener turning one on stands
+	// after that: it stays on.
+	var defaults []string
+	for _, p := range a.plugins {
+		if p.DefaultOff() {
+			defaults = append(defaults, p.Info().ID)
+		}
+	}
+	if applyPluginDefaults(a.settings, defaults) {
+		a.settings.save()
+	}
 	a.localSrc = &local.Source{Folders: append([]string(nil), a.settings.LocalFolders...)}
 	a.sources = []sourceEntry{
 		{id: local.ID, name: i18n.T("Local"), src: a.localSrc},
@@ -1287,6 +1299,9 @@ type settings struct {
 	UpdatesChecked time.Time `json:"updatesChecked,omitzero"`
 	// DisabledPlugins are the ids of the plugins turned off.
 	DisabledPlugins []string `json:"disabledPlugins,omitempty"`
+	// PluginDefaultsApplied are the plugins whose start-off default the app
+	// already applied, so turning one on isn't undone by the next run.
+	PluginDefaultsApplied []string `json:"pluginDefaultsApplied,omitempty"`
 	// Appearance is the palette the app draws with: system, dark or light.
 	Appearance string `json:"appearance,omitempty"`
 	// Proxy is the HTTP proxy the app's asks to the world go through,
@@ -1356,6 +1371,24 @@ func containsString(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// applyPluginDefaults turns the plugins that ask to start off off, once each:
+// a plugin the listener turned on after that stays on. It answers whether it
+// changed the settings, for the caller to save them.
+func applyPluginDefaults(s *settings, defaults []string) bool {
+	changed := false
+	for _, id := range defaults {
+		if containsString(s.PluginDefaultsApplied, id) {
+			continue
+		}
+		s.PluginDefaultsApplied = append(s.PluginDefaultsApplied, id)
+		changed = true
+		if !containsString(s.DisabledPlugins, id) {
+			s.DisabledPlugins = append(s.DisabledPlugins, id)
+		}
+	}
+	return changed
 }
 
 // pluginsDir is where plugins are dropped in.

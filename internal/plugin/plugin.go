@@ -3,7 +3,7 @@
 //
 //	{
 //	  "id": "example", "name": "Example", "main": "index.js", "playback": "stream",
-//	  "minAppVersion": "0.1.8",
+//	  "minAppVersion": "0.1.8", "defaultOff": false,
 //	  "permissions": {"network": ["api.example.com"], "process": ["bin/helper-*", "ffmpeg"]}
 //	}
 //
@@ -144,7 +144,11 @@ type Manifest struct {
 	Kind string `json:"kind,omitempty"`
 	// MinAppVersion is the oldest version of the app the plugin works with,
 	// such as 0.1.8. An older one won't install it, or load it.
-	MinAppVersion  string           `json:"minAppVersion,omitempty"`
+	MinAppVersion string `json:"minAppVersion,omitempty"`
+	// DefaultOff says the plugin starts off the first time the app sees it,
+	// which is how adult content ships: the settings turn it on, and the
+	// listener's choice stands after that.
+	DefaultOff     bool             `json:"defaultOff,omitempty"`
 	Permissions    Permissions      `json:"permissions"`
 	RequestHeaders []RequestHeaders `json:"requestHeaders,omitempty"`
 }
@@ -750,6 +754,10 @@ func (p *Plugin) Can(what string) bool { return p.exports[what] }
 // VideoOnly says whether the plugin is a source of videos alone: it shows in
 // the video window, and not among the sources of music.
 func (p *Plugin) VideoOnly() bool { return p.manifest.Kind == KindVideo }
+
+// DefaultOff says whether the plugin asks to start off the first time the app
+// sees it, as a source of adult content does. The settings turn it on.
+func (p *Plugin) DefaultOff() bool { return p.manifest.DefaultOff }
 
 // Video is the plugin as a source of videos, or nil if it doesn't do that: a
 // video source plays what videoSearch finds through videoItem and videoPlay.

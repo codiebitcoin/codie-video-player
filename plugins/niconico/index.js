@@ -153,14 +153,27 @@ export async function videoItem({ id }) {
   };
 }
 
+// isHLS 看协议:ニコニコ 的播放列表扩展名也是 mp4,只看扩展名会认错。
+function isHLS(f) {
+  if (!f) return false;
+  if (/m3u8|hls/i.test(f.ext || "")) return true;
+  return /m3u8/i.test(String(f.protocol || ""));
+}
+
+// worth 让一个文件的直链排在播放列表前面,再按高度取高的。
+function worth(f) {
+  const height = Math.max(+(f.height || 0), +(f.width || 0));
+  return (isHLS(f) ? 0 : 10000) + height;
+}
+
 function pick(formats) {
   const withUrl = (formats || []).filter((f) => f && f.url);
   const height = (f) => Math.max(+(f.height || 0), +(f.width || 0));
   const both = withUrl
     .filter((f) => f.vcodec && f.vcodec !== "none" && f.acodec && f.acodec !== "none")
-    .sort((a, b) => height(b) - height(a));
+    .sort((a, b) => worth(b) - worth(a));
   if (both.length) return { url: both[0].url, ext: both[0].ext || "mp4" };
-  const picture = withUrl.filter((f) => f.vcodec && f.vcodec !== "none").sort((a, b) => height(b) - height(a));
+  const picture = withUrl.filter((f) => f.vcodec && f.vcodec !== "none").sort((a, b) => worth(b) - worth(a));
   const sound = withUrl.filter((f) => f.acodec && f.acodec !== "none" && (!f.vcodec || f.vcodec === "none"));
   if (picture.length && sound.length) return { url: picture[0].url, audioUrl: sound[0].url, ext: picture[0].ext || "mp4" };
   if (picture.length) return { url: picture[0].url, ext: picture[0].ext || "mp4" };
@@ -171,7 +184,7 @@ export async function videoPlay({ id }) {
   const j = await ytdlp(["--dump-single-json", watchURL(id)], PLAY_TIMEOUT);
   const picked = pick(j.formats) || (j.url ? { url: j.url, ext: j.ext || "mp4" } : null);
   if (!picked) throw fail("unavailable", t("no playable stream for this video"));
-  const hls = /m3u8|hls/.test(picked.ext || "") || /m3u8/.test(picked.url);
+  const hls = isHLS(picked) || /m3u8/.test(picked.url);
   return picked.audioUrl
     ? { url: picked.url, audioUrl: picked.audioUrl, type: hls ? "hls" : "mp4" }
     : { url: picked.url, type: hls ? "hls" : "mp4" };

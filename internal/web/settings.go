@@ -21,6 +21,9 @@ type settings struct {
 	// DisabledPlugins are the plugins turned off. Huangguo starts off: it ships
 	// with the app, and comes on from the settings when wanted.
 	DisabledPlugins []string `json:"disabledPlugins,omitempty"`
+	// PluginDefaultsApplied are the plugins whose start-off default the app
+	// already applied, so turning one on isn't undone by the next run.
+	PluginDefaultsApplied []string `json:"pluginDefaultsApplied,omitempty"`
 	// DisabledSources is what an older file called the same switch, when
 	// Huangguo was built in. It's read once and folded into DisabledPlugins.
 	DisabledSources []string `json:"disabledSources,omitempty"`
@@ -46,6 +49,7 @@ func (s *settings) save() {
 	out["language"] = s.Language
 	out["localFolders"] = s.LocalFolders
 	out["disabledPlugins"] = s.DisabledPlugins
+	out["pluginDefaultsApplied"] = s.PluginDefaultsApplied
 	out["disabledSources"] = s.DisabledSources
 	out["sourcesChosen"] = s.SourcesChosen
 	b, err := json.MarshalIndent(out, "", "  ")
@@ -73,6 +77,7 @@ func loadSettings(dir string) *settings {
 			take("language", &s.Language)
 			take("localFolders", &s.LocalFolders)
 			take("disabledPlugins", &s.DisabledPlugins)
+			take("pluginDefaultsApplied", &s.PluginDefaultsApplied)
 			take("disabledSources", &s.DisabledSources)
 			take("sourcesChosen", &s.SourcesChosen)
 			s.rest = raw
@@ -104,4 +109,22 @@ func containsString(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// applyPluginDefaults turns the plugins that ask to start off off, once each:
+// a plugin the viewer turned on after that stays on. It answers whether it
+// changed the settings, for the caller to save them.
+func applyPluginDefaults(s *settings, defaults []string) bool {
+	changed := false
+	for _, id := range defaults {
+		if containsString(s.PluginDefaultsApplied, id) {
+			continue
+		}
+		s.PluginDefaultsApplied = append(s.PluginDefaultsApplied, id)
+		changed = true
+		if !containsString(s.DisabledPlugins, id) {
+			s.DisabledPlugins = append(s.DisabledPlugins, id)
+		}
+	}
+	return changed
 }

@@ -79,7 +79,20 @@ func New(opt Options) (*Server, error) {
 		return "", errors.New(i18n.T("This app doesn't sign in to accounts"))
 	})
 	dataDir := filepath.Join(opt.DataDir, "plugin-data")
-	for _, p := range plugin.Discover(opt.PluginsDir, dataDir) {
+	discovered := plugin.Discover(opt.PluginsDir, dataDir)
+	// A plugin that asks to start off does so the first time the server sees
+	// it, as the desktop does: adult sources ship off. A viewer turning one
+	// on stands after that.
+	var defaults []string
+	for _, p := range discovered {
+		if p.DefaultOff() {
+			defaults = append(defaults, p.Info().ID)
+		}
+	}
+	if applyPluginDefaults(s.settings, defaults) {
+		s.settings.save()
+	}
+	for _, p := range discovered {
 		// A server runner has already said yes to what plugins run; the
 		// desktop's grant banner has no page here.
 		if len(p.Permissions().Process) > 0 && !p.Granted() {
