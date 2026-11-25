@@ -22,6 +22,10 @@ const (
 	// signInPageFor is how long the page waits for them, as long as the
 	// plugin waits for a sign-in.
 	signInPageFor = 5 * time.Minute
+	// signInCookieGrace is how long a page has to make its own cookies
+	// before those UntilChanged names are watched for a change: a site that
+	// renews its session at sign-in makes the first ones as it loads.
+	signInCookieGrace = 2 * time.Second
 )
 
 // webSignIn shows a plugin's sign-in page in a window of its own, over the
@@ -63,6 +67,8 @@ func (a *app) webSignIn(o plugin.WebSignIn) (string, error) {
 	defer tick.Stop()
 	timeout := time.NewTimer(signInPageFor)
 	defer timeout.Stop()
+	opened := time.Now()
+	var was map[string]string // the cookies named in UntilChanged, as the page made them
 	for {
 		select {
 		case <-closed:
@@ -76,7 +82,14 @@ func (a *app) webSignIn(o plugin.WebSignIn) (string, error) {
 				log.Printf("sign-in page of %s: %v", o.Plugin, err)
 				continue
 			}
-			if header, ok := cookieHeader(cookies, o.Until); ok {
+			if len(o.UntilChanged) > 0 && was == nil && time.Since(opened) >= signInCookieGrace {
+				// The page's own cookies are what a sign-in renews: these are
+				// the ones it made as it loaded.
+				if values := cookieValues(cookies); len(values) > 0 {
+					was = values
+				}
+			}
+			if header, ok := cookieHeader(cookies, o.Until, o.UntilChanged, was); ok {
 				win.Close()
 				return header, nil
 			}
@@ -84,20 +97,46 @@ func (a *app) webSignIn(o plugin.WebSignIn) (string, error) {
 	}
 }
 
+// cookieValues is the cookies by name, as they are now.
+func cookieValues(cookies []mygo.Cookie) map[string]string {
+	values := make(map[string]string, len(cookies))
+	for _, c := range cookies {
+		values[c.Name] = c.Value
+	}
+	return values
+}
+
 // cookieHeader is the Cookie header that sends cookies, once those named in
-// until are all among them.
-func cookieHeader(cookies []mygo.Cookie, until []string) (string, bool) {
-	have := map[string]bool{}
+// until are all among them, and any of those in changed has a value other
+// than the one it had in was. A nil was answers false: the page hasn't had
+// its moment to make them yet.
+func cookieHeader(cookies []mygo.Cookie, until, changed []string, was map[string]string) (string, bool) {
+	have := map[string]string{}
 	parts := make([]string, 0, len(cookies))
 	for _, c := range cookies {
 		if c.Value == "" {
 			continue
 		}
-		have[c.Name] = true
+		have[c.Name] = c.Value
 		parts = append(parts, c.Name+"="+c.Value)
 	}
 	for _, name := range until {
-		if !have[name] {
+		if have[name] == "" {
+			return "", false
+		}
+	}
+	if len(changed) > 0 {
+		if was == nil {
+			return "", false
+		}
+		differs := false
+		for _, name := range changed {
+			if have[name] != "" && have[name] != was[name] {
+				differs = true
+				break
+			}
+		}
+		if !differs {
 			return "", false
 		}
 	}

@@ -1,0 +1,31 @@
+{
+  "id": "tokyomotion",
+  "name": "TokyoMotion",
+  "version": "0.2.0",
+  "minAppVersion": "0.1.40",
+  "kind": "video",
+  "main": "index.js",
+  "playback": "stream",
+  "defaultOff": true,
+  "permissions": {
+    "network": [
+      "tokyomotion.net",
+      "*.tokyomotion.net",
+      "*.tokyo-motion.net"
+    ]
+  },
+  "requestHeaders": [
+    {
+      "hosts": [
+        "*.tokyo-motion.net"
+      ],
+      "kinds": [
+        "image"
+      ],
+      "headers": {
+        "Referer": "https://www.tokyomotion.net/",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+      }
+    }
+  ]
+}

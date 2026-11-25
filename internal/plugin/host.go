@@ -54,6 +54,12 @@ type WebSignIn struct {
 	// Until names the cookies that say the listener signed in: once all of
 	// them are there, the window closes and the cookies go to the plugin.
 	Until []string `json:"until"`
+	// UntilChanged names cookies that say it another way: sites that keep
+	// the session's cookie name and renew it at sign-in, as PHP's sessions
+	// do. Once any of them has a value other than the one it had when the
+	// page opened, the window closes. A page takes a moment to make those,
+	// so the first two seconds aren't compared.
+	UntilChanged []string `json:"untilChanged,omitempty"`
 	// UserAgent is what the page is told it's shown in, for a site that
 	// turns down what it doesn't know.
 	UserAgent string `json:"userAgent,omitempty"`

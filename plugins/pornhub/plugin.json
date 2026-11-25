@@ -1,0 +1,38 @@
+{
+  "id": "pornhub",
+  "name": "Pornhub",
+  "version": "0.2.0",
+  "minAppVersion": "0.1.40",
+  "kind": "video",
+  "main": "index.js",
+  "playback": "stream",
+  "defaultOff": true,
+  "permissions": {
+    "network": [
+      "pornhub.com",
+      "*.pornhub.com",
+      "*.phncdn.com"
+    ],
+    "process": [
+      "yt-dlp",
+      "bin/yt-dlp",
+      "bin/yt-dlp.exe",
+      "/opt/homebrew/bin/yt-dlp",
+      "/usr/local/bin/yt-dlp"
+    ]
+  },
+  "requestHeaders": [
+    {
+      "hosts": [
+        "*.phncdn.com"
+      ],
+      "kinds": [
+        "image"
+      ],
+      "headers": {
+        "Referer": "https://www.pornhub.com/",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+      }
+    }
+  ]
+}

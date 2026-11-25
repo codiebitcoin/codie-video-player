@@ -8,5 +8,9 @@
   "yt-dlp is not installed on this machine": "这台机器上没有 yt-dlp",
   "Allow NicoNico to start programs in the settings' plugins page": "请在设置的插件页里允许 NicoNico 启动程序",
   "no playable stream for this video": "这个视频没有可播的流",
-  "this video needs a sign-in NicoNico doesn't offer here": "这个视频要登录，这里还不能登 NicoNico"
+  "this video needs a sign-in NicoNico doesn't offer here": "这个视频要登录，这里还不能登 NicoNico",
+  "Watch Later": "稍后观看",
+  "Sign in to NicoNico to do this": "登录 NicoNico 后才能这么做",
+  "This app can't show the site's sign-in page": "这个应用打不开网站的登录页",
+  "NicoNico didn't take that sign-in: try again": "NicoNico 没接受这次登录，请再试一次"
 }

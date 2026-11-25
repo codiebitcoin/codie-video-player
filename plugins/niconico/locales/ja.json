@@ -8,5 +8,9 @@
   "yt-dlp is not installed on this machine": "このマシンに yt-dlp がありません",
   "Allow NicoNico to start programs in the settings' plugins page": "設定のプラグインで NicoNico のプログラム起動を許可してください",
   "no playable stream for this video": "この動画には再生できる配信がありません",
-  "this video needs a sign-in NicoNico doesn't offer here": "この動画はログインが必要です。ここではニコニコにログインできません"
+  "this video needs a sign-in NicoNico doesn't offer here": "この動画はログインが必要です。ここではニコニコにログインできません",
+  "Watch Later": "後で見る",
+  "Sign in to NicoNico to do this": "ニコニコにログインすると使えます",
+  "This app can't show the site's sign-in page": "このアプリではサイトのログインページを開けません",
+  "NicoNico didn't take that sign-in: try again": "ニコニコがログインを受け付けませんでした。もう一度お試しください"
 }
