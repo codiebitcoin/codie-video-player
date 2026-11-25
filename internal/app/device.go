@@ -2,10 +2,14 @@ package app
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"runtime"
 
@@ -28,6 +32,10 @@ type pairState struct {
 	code      string // the 6 digits typed back
 	busy      string // what's on its way
 	err       string
+	// found are the devices a scan of the network turned up, host:8081, for
+	// the list the listener picks from. scanning says one is on its way.
+	found    []string
+	scanning bool
 }
 
 // codiePath is where the paired device's credential is kept — with the rest
@@ -114,6 +122,7 @@ func (a *app) pairingView(c *ui.Context) {
 	ui.Column(c).Gap(14).Children(func() {
 		ui.Text(c, i18n.T("Connect a codie device")).FontSize(20).FontWeight(800)
 		ui.Text(c, i18n.T("Put the device and this computer on the same network, find the device’s IP (it shows in its settings), and fill it in below. When pairing starts, the device’s screen shows a 6-digit code.")).FontSize(13).TextColor(colors.muted).LineHeight(1.5)
+		a.scanRow(c)
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Margin(6, 0, 0, 0).Children(func() {
 			ui.Box(c).Grow(1).Children(func() {
 				field := ui.Row(c.Key("addr-field")).Height(34).Radius(8).AlignItems(ui.Stretch)
@@ -242,6 +251,169 @@ func (a *app) pairedView(c *ui.Context) {
 			})
 		}
 	})
+}
+
+// scanRow is the way to find a device instead of typing its address: a scan of
+// the network, then one button to a device it found, which fills the address.
+func (a *app) scanRow(c *ui.Context) {
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Margin(6, 0, 0, 0).Children(func() {
+		label := i18n.T("Scan for devices")
+		if a.pair.scanning {
+			label = i18n.T("Scanning…")
+		}
+		if ui.Button(c.Key("scan"), label).Clicked() && !a.pair.scanning {
+			a.deviceScan()
+		}
+		if a.pair.scanning {
+			ui.Spinner(c).Size(14, 14)
+		}
+	})
+	if len(a.pair.found) == 0 {
+		return
+	}
+	ui.Column(c).Gap(6).Children(func() {
+		for i, addr := range a.pair.found {
+			host := addr
+			b := ui.ButtonBase(c.Key("found" + strconv.Itoa(i))).Height(32).PaddingX(12).Radius(8).
+				AlignItems(ui.Center).Justify(ui.Start).FocusRing(false).Label(host).Background(colors.hover)
+			b.Children(func() {
+				ui.Text(c, host).FontSize(13).FontWeight(600)
+			})
+			if b.Clicked() {
+				a.pair.addr = host
+				a.deviceRequestPair()
+			}
+		}
+	})
+}
+
+// deviceScan looks for codie devices on this computer's own networks, each at
+// port 8081, and lists the ones that answer.
+func (a *app) deviceScan() {
+	a.pair.scanning = true
+	a.pair.found = nil
+	a.pair.err = ""
+	go func() {
+		found := scanDevices()
+		a.post(func() {
+			a.pair.scanning = false
+			a.pair.found = found
+			if len(found) == 0 {
+				a.pair.err = i18n.T("No device found on this network")
+			}
+		})
+	}()
+}
+
+// scanDevices asks every address of this computer's own networks whether a
+// codie device listens there, on 8081, and answers the ones that do.
+func scanDevices() []string {
+	nets := localNets()
+	if len(nets) == 0 {
+		return nil
+	}
+	var mu sync.Mutex
+	var found []string
+	var wg sync.WaitGroup
+	gate := make(chan struct{}, 64)
+	for _, n := range nets {
+		for ip := range hostsOf(n) {
+			wg.Add(1)
+			gate <- struct{}{}
+			go func(ip string) {
+				defer wg.Done()
+				defer func() { <-gate }()
+				addr := ip + ":" + codieout.DefaultPort
+				if portOpen(addr) && codieout.Dial(addr) == nil {
+					mu.Lock()
+					found = append(found, addr)
+					mu.Unlock()
+				}
+			}(ip)
+		}
+	}
+	wg.Wait()
+	sort.Strings(found)
+	return found
+}
+
+// portOpen says whether anything answers at addr within a short while, so a
+// scan doesn't wait on every address that has nothing there.
+func portOpen(addr string) bool {
+	c, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	c.Close()
+	return true
+}
+
+// localNets are the networks this computer sits on, the private ones, each
+// cut down to what a scan can finish: a /24 at the widest.
+func localNets() []net.IPNet {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var out []net.IPNet
+	for _, ifi := range ifaces {
+		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := ifi.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, ad := range addrs {
+			ipn, ok := ad.(*net.IPNet)
+			if !ok || ipn.IP.To4() == nil || !ipn.IP.IsPrivate() {
+				continue
+			}
+			ones, _ := ipn.Mask.Size()
+			if ones < 24 {
+				ipn.Mask = net.CIDRMask(24, 32)
+				ones = 24
+			}
+			out = append(out, *ipn)
+		}
+	}
+	return out
+}
+
+// hostsOf walks the addresses of a network, leaving out the network's own and
+// its broadcast.
+func hostsOf(n net.IPNet) func(func(string) bool) {
+	return func(yield func(string) bool) {
+		ip := n.IP.To4()
+		if ip == nil {
+			return
+		}
+		cur := make(net.IP, len(ip))
+		copy(cur, ip.Mask(n.Mask))
+		inc(cur)
+		for n.Contains(cur) {
+			next := make(net.IP, len(cur))
+			copy(next, cur)
+			inc(next)
+			if !n.Contains(next) {
+				return // the broadcast
+			}
+			if !yield(cur.String()) {
+				return
+			}
+			cur = next
+		}
+	}
+}
+
+// inc steps an address up by one.
+func inc(ip net.IP) {
+	for i := len(ip) - 1; i >= 0; i-- {
+		ip[i]++
+		if ip[i] != 0 {
+			return
+		}
+	}
 }
 
 // deviceRequestPair checks the address, and has the device show its code.

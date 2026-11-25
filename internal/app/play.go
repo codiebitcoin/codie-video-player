@@ -37,7 +37,10 @@ var openEpisodeStream = func(s *video.Stream) (*ui.VideoPlayer, string, error) {
 		// A file on this machine plays as it is; the proxy never sees it.
 		p, err := mygovideo.Open(s.URL)
 		return p, "", err
-	case s.AudioURL != "", len(s.Headers) > 0, s.Type == "hls" && runtime.GOOS == "linux":
+	case s.AudioURL != "", len(s.Headers) > 0, s.Type == "hls" && runtime.GOOS != "darwin":
+		// Picture and sound apart, or a playlist: ffmpeg joins them into one
+		// mp4 the player opens. macOS plays HLS itself; Windows and Linux
+		// don't, and a playlist opened there never becomes ready.
 		return throughFFmpeg(s)
 	default:
 		p, err := mygovideo.OpenURL(s.URL)

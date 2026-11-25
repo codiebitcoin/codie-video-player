@@ -185,4 +185,7 @@ var zhCN = map[string]string{
 	"Add a folder of videos to play it here":                        "添加一个视频文件夹，在这里播放",
 	"Sources":                                                       "来源",
 	"Ships with the app; off until you turn it on": "随应用自带，打开开关才启用",
+	"Scan for devices":                "扫描设备",
+	"Scanning…":                       "扫描中…",
+	"No device found on this network": "这个网络上没找到设备",
 }

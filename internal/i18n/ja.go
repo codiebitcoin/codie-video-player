@@ -185,4 +185,7 @@ var jaJP = map[string]string{
 	"Add a folder of videos to play it here":                        "動画フォルダを追加すると、ここで再生できます",
 	"Sources":                                                       "ソース",
 	"Ships with the app; off until you turn it on":                  "アプリに同梱。オンにするまで無効です",
+	"Scan for devices":                                              "デバイスを探す",
+	"Scanning…":                                                     "探しています…",
+	"No device found on this network":                               "このネットワークにデバイスは見つかりませんでした",
 }

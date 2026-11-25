@@ -211,6 +211,14 @@ export async function videoItem({ id }) {
   };
 }
 
+// isHLS says whether a format is a playlist: YouTube serves HLS with the ext
+// mp4 as often as not, so the protocol is what tells.
+function isHLS(f) {
+  if (!f) return false;
+  if (f.ext === "m3u8" || f.ext === "hls") return true;
+  return /m3u8/i.test(String(f.protocol || ""));
+}
+
 // pick finds the worthiest stream of a video's formats: a stream with both
 // picture and sound first, else the two worthiest apart.
 function pick(formats) {
@@ -220,7 +228,7 @@ function pick(formats) {
     .filter((f) => f.vcodec && f.vcodec !== "none" && f.acodec && f.acodec !== "none")
     .sort((a, b) => height(b) - height(a));
   if (both.length) {
-    return { url: both[0].url, audioUrl: "", ext: both[0].ext || "mp4" };
+    return { url: both[0].url, audioUrl: "", ext: both[0].ext || "mp4", hls: isHLS(both[0]) };
   }
   const picture = withUrl
     .filter((f) => f.vcodec && f.vcodec !== "none")
@@ -229,7 +237,7 @@ function pick(formats) {
     .filter((f) => f.acodec && f.acodec !== "none" && (!f.vcodec || f.vcodec === "none"))
     .sort((a, b) => +((b.abr || 0) + "") > +((a.abr || 0) + "") ? 1 : -1);
   if (picture.length && sound.length) {
-    return { url: picture[0].url, audioUrl: sound[0].url, ext: picture[0].ext || "mp4" };
+    return { url: picture[0].url, audioUrl: sound[0].url, ext: picture[0].ext || "mp4", hls: isHLS(picture[0]) };
   }
   return null;
 }
@@ -242,11 +250,11 @@ export async function videoPlay({ id }) {
   if (!playable(j)) {
     throw fail("unavailable", "live streams can't be played here");
   }
-  const picked = pick(j.formats) || (j.url ? { url: j.url, audioUrl: "", ext: j.ext || "mp4" } : null);
+  const picked = pick(j.formats) || (j.url ? { url: j.url, audioUrl: "", ext: j.ext || "mp4", hls: isHLS(j) } : null);
   if (!picked) {
     throw fail("unavailable", "no playable stream for this video");
   }
-  const type = picked.ext === "m3u8" || picked.ext === "hls" ? "hls" : "mp4";
+  const type = picked.hls ? "hls" : "mp4";
   return picked.audioUrl
     ? { url: picked.url, audioUrl: picked.audioUrl, type }
     : { url: picked.url, type };
