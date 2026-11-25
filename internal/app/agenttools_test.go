@@ -58,8 +58,8 @@ func toolApp(t *testing.T) *app {
 	oldRead, oldMake, oldOpen, oldWait := readOnMain, findFFmpegFn, openEpisodeStream, toolSearchWait
 	readOnMain = func(fn func()) { fn() }
 	findFFmpegFn = func() string { return "" }
-	openEpisodeStream = func(*video.Stream) (*ui.VideoPlayer, string, error) {
-		return nil, "", fmt.Errorf("no player in tests")
+	openEpisodeStream = func(*video.Stream, float64) (*ui.VideoPlayer, string, bool, error) {
+		return nil, "", false, fmt.Errorf("no player in tests")
 	}
 	toolSearchWait = 300 * time.Millisecond
 	t.Cleanup(func() {

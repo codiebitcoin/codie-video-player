@@ -62,12 +62,11 @@ const codieFFmpegTimeout = 20 * time.Minute
 // doing.
 const codiePollEvery = 800 * time.Millisecond
 
-// playEpisodeOnDevice makes the episode into an MP4 the device takes (splitting
-// it into multiple segments if it exceeds the device's 128MiB single-session
-// cap), opens a session of it fullscreen, and lets the device play it. resumeS
-// is where the story was left, in seconds (0 plays from the top); the episode
-// runs at whatever the app's rate is now, which is baked into the file, for the
-// device itself has no say over its speed.
+// playEpisodeOnDevice makes the episode into an MP4 the device takes and puts
+// it on the device's screen. resumeS is where the story was left, in seconds
+// (0 plays from the top); the episode runs at whatever the app's rate is now,
+// which is baked into the file, for the device itself has no say over its
+// speed.
 func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *video.Stream, resumeS float64) {
 	rate := a.rate
 	var gen uint64
@@ -93,6 +92,13 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 		})
 		return
 	}
+	a.codieShow(dst, rate, resumeS, gen)
+}
+
+// codieShow splits what's over the device's one-session cap into segments,
+// opens a session of it fullscreen, and lets the device play it. gen says
+// which player the file was made for: one stopped since is not this one.
+func (a *app) codieShow(dst string, rate, resumeS float64, gen uint64) {
 	segs, totalMS, err := codiePrepareSegments(dst)
 	if err != nil {
 		os.Remove(dst)
@@ -153,6 +159,7 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 			return
 		}
 		a.codiePoll(session)
+		a.codiePrepareNext()
 	})
 }
 
@@ -369,16 +376,25 @@ func codieResumeStart(resumeS, rate float64) int64 {
 // rest are transcoded, which takes minutes — a copied stream can't change
 // its pace, so any other rate makes a full transcode of it.
 func (a *app) codieMakeMP4(s *video.Stream, rate float64) (string, error) {
-	ffmpeg := findFFmpegFn()
-	if ffmpeg == "" {
-		return "", errors.New(i18n.T("The device needs ffmpeg to take episodes; install it with your package manager and try again"))
-	}
 	f, err := os.CreateTemp("", "codie-codie-*.mp4")
 	if err != nil {
 		return "", err
 	}
 	dst := f.Name()
 	f.Close()
+	if err := a.codieMakeMP4To(s, rate, dst); err != nil {
+		os.Remove(dst)
+		return "", err
+	}
+	return dst, nil
+}
+
+// codieMakeMP4To makes the episode's MP4 at dst.
+func (a *app) codieMakeMP4To(s *video.Stream, rate float64, dst string) error {
+	ffmpeg := findFFmpegFn()
+	if ffmpeg == "" {
+		return errors.New(i18n.T("The device needs ffmpeg to take episodes; install it with your package manager and try again"))
+	}
 	asIs := rate == 1 && probePlayableAsIs(s, s.Headers)
 	if asIs {
 		log.Printf("codie play: streams already in device shape; copying")
@@ -393,21 +409,17 @@ func (a *app) codieMakeMP4(s *video.Stream, rate float64) (string, error) {
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		os.Remove(dst)
-		return "", err
+		return err
 	}
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
 		os.Remove(dst)
-		return "", err
+		return err
 	}
-	// ffmpeg 报告自己的进度:每一行 out_time_us=微秒。
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	reader := make([]byte, 0, 0)
 	buf := make([]byte, 4<<10)
-	var lastUS int64 = -1
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
 readLoop:
 	for {
 		select {
@@ -415,32 +427,18 @@ readLoop:
 			if err != nil {
 				os.Remove(dst)
 				if ctx.Err() != nil {
-					return "", errors.New(i18n.T("This episode timed out transcoding; try again"))
+					return errors.New(i18n.T("This episode timed out transcoding; try again"))
 				}
-				return "", fmt.Errorf("%s", tailLine(append(reader, buf...)))
+				return fmt.Errorf("%s", tailLine(append(reader, buf...)))
 			}
 			break readLoop
-		case <-ticker.C:
-			if lastUS >= 0 && s.Type != "" {
-				a.post(func() {
-					if a.codieBusy != "" {
-						a.codieBusy = i18n.Tf("Transcoding for the device… %d%%", percentOf(lastUS))
-					}
-				})
-			}
 		default:
 			n, rerr := out.Read(buf)
 			if n > 0 {
 				reader = append(reader, buf[:n]...)
 				for _, line := range strings.Split(string(buf[:n]), "\n") {
-					if us, ok := strings.CutPrefix(line, "out_time_us="); ok {
-						if v, e := strconv.ParseInt(strings.TrimSpace(us), 10, 64); e == nil {
-							lastUS = v
-						}
-						continue
-					}
-					// ffmpeg's own complaints share the pipe with its progress;
-					// without them a pass that goes nowhere says nothing.
+					// ffmpeg's own complaints share the pipe with its progress
+					// counters; without them a pass that goes nowhere says nothing.
 					if line = strings.TrimSpace(line); line != "" && !strings.Contains(line, "=") {
 						log.Printf("codie ffmpeg: %s", line)
 					}
@@ -451,15 +449,15 @@ readLoop:
 				if werr := <-done; werr != nil {
 					os.Remove(dst)
 					if ctx.Err() != nil {
-						return "", errors.New(i18n.T("This episode timed out transcoding; try again"))
+						return errors.New(i18n.T("This episode timed out transcoding; try again"))
 					}
-					return "", fmt.Errorf("%s", tailLine(reader))
+					return fmt.Errorf("%s", tailLine(reader))
 				}
 				break readLoop
 			}
 		}
 	}
-	return dst, nil
+	return nil
 }
 
 // codieFFmpegArgs is what ffmpeg gets for an episode: the inputs (the
@@ -505,14 +503,99 @@ func codieFFmpegArgs(s *video.Stream, rate float64, asIs bool, dst string) []str
 	return append(args, "-movflags", "+faststart", "-progress", "pipe:1", dst)
 }
 
-// percentOf is how far a microsecond count is into a normal episode, for the
-// busy line; a source that knows its duration replaces this with the real one.
-func percentOf(us int64) int {
-	p := int(us / 1e6 / 240 * 100) // 以 4 分钟一集估
-	if p > 99 {
-		p = 99
+// codiePrepared is an episode already made for the device: the playlist's
+// next video's first episode, kept until its turn comes.
+type codiePrepared struct {
+	source string
+	item   string
+	ep     string
+	rate   float64
+	path   string
+}
+
+// takeCodiePrepared hands back the file readied for item's episode, if it is
+// the one and was made at the rate it would play at now; the file's
+// ownership goes with it. Anything else leaves the file where it is.
+func (a *app) takeCodiePrepared(item video.Item, ep video.Episode) (string, float64, bool) {
+	p := a.prepared
+	if p == nil || p.item != item.ID || p.ep != ep.ID || p.rate != a.rate {
+		return "", 0, false
 	}
-	return p
+	if p.source != "" && item.Source != "" && p.source != item.Source {
+		return "", 0, false
+	}
+	a.prepared = nil
+	return p.path, p.rate, true
+}
+
+// codiePrepareNext makes the playlist's next video's first episode for the
+// device while this one plays, so moving on costs no wait. One at a time: a
+// file readied for another turn would be dropped the moment this runs again.
+func (a *app) codiePrepareNext() {
+	if a.precoding || a.codie == nil || !a.deviceOutput || a.settings == nil {
+		return
+	}
+	idx := a.queueAt + 1
+	if a.queueAt < 0 || idx >= len(a.queue) {
+		return
+	}
+	it := a.queue[idx]
+	if it.ID == "" {
+		return
+	}
+	ep := firstEpisodeOf(it)
+	rate := a.rate
+	src := a.sourceOf(it.Source)
+	if src == nil {
+		src = a.sourceEntry
+	}
+	if src == nil {
+		return
+	}
+	if p := a.prepared; p != nil {
+		if p.item == it.ID && p.ep == ep.ID && p.rate == rate && (p.source == "" || it.Source == "" || p.source == it.Source) {
+			return // already readied
+		}
+		os.Remove(p.path)
+		a.prepared = nil
+	}
+	a.precoding = true
+	go func() {
+		var path string
+		err := func() error {
+			f, err := os.CreateTemp("", "codie-next-*.mp4")
+			if err != nil {
+				return err
+			}
+			path = f.Name()
+			f.Close()
+			s, err := src.src.Play(it.ID, ep.ID)
+			if err != nil {
+				return err
+			}
+			return a.codieMakeMP4To(s, rate, path)
+		}()
+		a.post(func() {
+			a.precoding = false
+			if err != nil {
+				if path != "" {
+					os.Remove(path)
+				}
+				log.Printf("codie prepare next: %v", err)
+				return
+			}
+			a.prepared = &codiePrepared{source: it.Source, item: it.ID, ep: ep.ID, rate: rate, path: path}
+			log.Printf("codie prepare next: %s / %s is ready", it.ID, ep.ID)
+		})
+	}()
+}
+
+// cleanCodiePrepared drops files an earlier run readied and never played.
+func cleanCodiePrepared() {
+	matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "codie-next-*.mp4"))
+	for _, m := range matches {
+		os.Remove(m)
+	}
 }
 
 // probePlayableAsIs asks ffprobe whether the stream already plays as the

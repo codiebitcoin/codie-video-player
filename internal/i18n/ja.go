@@ -137,7 +137,6 @@ var jaJP = map[string]string{
 	"This episode won’t play":                                                                                                                      "この話は再生できません",
 	"This plugin needs ffmpeg / yt-dlp to open streams.":                                                                                           "このプラグインはストリームを開くのに ffmpeg / yt-dlp を使います。",
 	"Transcoding for the device…":                                                                                                                  "デバイス用に変換中…",
-	"Transcoding for the device… %d%%":                                                                                                             "デバイス用に変換中… %d%%",
 	"Try Again":                                                                                                                                    "もう一度",
 	"Up next":                                                                                                                                      "まもなく次の話",
 	"Up next: %s":                                                                                                                                  "まもなく %s",

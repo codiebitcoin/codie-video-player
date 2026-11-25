@@ -135,7 +135,6 @@ var zhCN = map[string]string{
 	"This episode won’t play":                                                                                                                      "这一集放不了",
 	"This plugin needs ffmpeg / yt-dlp to open streams.":                                                                                           "这个插件要启动 ffmpeg / yt-dlp 才能取流。",
 	"Transcoding for the device…":                                                                                                                  "正在为设备转码…",
-	"Transcoding for the device… %d%%":                                                                                                             "正在为设备转码… %d%%",
 	"Try Again":                                                                                                                                    "再试一次",
 	"Up next":                                                                                                                                      "即将播放下一集",
 	"Up next: %s":                                                                                                                                  "即将播放 %s",

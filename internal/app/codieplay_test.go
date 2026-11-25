@@ -406,3 +406,24 @@ func TestCodieMultiSegmentAndPlaylistQueueCompatibility(t *testing.T) {
 
 
 
+
+func TestTakeCodiePrepared(t *testing.T) {
+	// The file readied for the playlist's next video plays for that very
+	// episode at the speed it was made at, and only once: another video, or
+	// another speed, would show the wrong thing at the wrong pace.
+	a := &app{rate: 1, prepared: &codiePrepared{source: "youtube", item: "a", ep: "1", rate: 1, path: "next.mp4"}}
+	if _, _, ok := a.takeCodiePrepared(video.Item{ID: "b", Source: "youtube"}, video.Episode{ID: "1"}); ok {
+		t.Error("a file made for another video was played")
+	}
+	a.rate = 1.5
+	if _, _, ok := a.takeCodiePrepared(video.Item{ID: "a", Source: "youtube"}, video.Episode{ID: "1"}); ok {
+		t.Error("a file made at 1× was played at 1.5×")
+	}
+	a.rate = 1
+	if p, rate, ok := a.takeCodiePrepared(video.Item{ID: "a", Source: "youtube"}, video.Episode{ID: "1"}); !ok || p != "next.mp4" || rate != 1 {
+		t.Fatalf("the readied file wasn't taken: %q %v %v", p, rate, ok)
+	}
+	if _, _, ok := a.takeCodiePrepared(video.Item{ID: "a", Source: "youtube"}, video.Episode{ID: "1"}); ok {
+		t.Error("the same file was handed out twice")
+	}
+}

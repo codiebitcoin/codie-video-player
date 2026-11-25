@@ -156,6 +156,9 @@ type app struct {
 	codieGen          uint64
 	codieState        *codieout.MediaSessionState
 	codieBusy         string
+	// 预转码:播放列表里下一部的第一集已经为设备转好,轮到它时不必再等。
+	prepared  *codiePrepared
+	precoding bool
 
 	// The conversation tools: the catalog served to the paired device, so
 	// what the viewer says to it ("next one", "play …") moves the playback.
@@ -222,6 +225,7 @@ func Run(bundledPlugins embed.FS) error {
 		a.settings = loadSettings()
 		a.lib = library.Load(userDataDir(""))
 		proxy.Set(a.settings.Proxy)
+		cleanCodiePrepared()
 		if a.settings.Appearance == "" {
 			a.settings.Appearance = AppearanceSystem
 		}
@@ -949,6 +953,13 @@ func (a *app) playEpisode(item video.Item, ep video.Episode, at int) {
 	if a.deviceOutput && a.codie != nil {
 		resumeAt := a.resumeAt
 		a.resumeAt = 0
+		// 播放列表里预转好的这一集:不再取流、转码,直接放。
+		if path, rate, ok := a.takeCodiePrepared(item, ep); ok {
+			gen := a.codieGen
+			log.Printf("codie play: playing the file readied for %s / %s", item.ID, ep.ID)
+			go a.codieShow(path, rate, resumeAt, gen)
+			return
+		}
 		a.codieBusy = i18n.T("Transcoding for the device…")
 		go func() {
 			log.Printf("codie play: resolving %s / %s", item.ID, ep.ID)
@@ -984,9 +995,19 @@ func (a *app) playEpisode(item video.Item, ep video.Episode, at int) {
 			a.post(func() { a.playerErr = videoProblem(err, i18n.T("This episode won\u2019t play")) })
 			return
 		}
-		p, file, err := openEpisodeStream(s)
+		// Where the story was left goes into the pass itself when the stream is
+		// made on the fly; an address or a file the player opens seeks after.
+		startS := 0.0
+		if a.resumeAt > 2 {
+			startS = a.resumeAt - 2
+		}
+		p, file, baked, err := openEpisodeStream(s, startS)
 		a.post(func() {
 			if a.playing.item.ID != item.ID || a.playing.at != at || a.page != pagePlay {
+				if p != nil {
+					stopStream(p)
+					p.Close()
+				}
 				if file != "" {
 					go os.Remove(file)
 				}
@@ -1002,7 +1023,9 @@ func (a *app) playEpisode(item video.Item, ep video.Episode, at int) {
 				p.SetRate(a.rate)
 			}
 			if a.resumeAt > 0 {
-				p.Seek(time.Duration((a.resumeAt - 2) * float64(time.Second)))
+				if !baked {
+					p.Seek(time.Duration((a.resumeAt - 2) * float64(time.Second)))
+				}
 				a.resumeAt = 0
 			}
 			a.startWatchTicker()
@@ -1130,6 +1153,9 @@ func (a *app) stopPlayer() {
 	p, file := a.player, a.playerFile
 	a.player, a.playerFile = nil, ""
 	if p != nil {
+		// A stream fed by ffmpeg ends with its player, or the pass runs on
+		// with nothing watching it.
+		stopStream(p)
 		p.Close()
 	}
 	if file != "" {
