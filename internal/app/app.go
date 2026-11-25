@@ -805,7 +805,11 @@ func (a *app) loadMore() {
 					time.AfterFunc(1200*time.Millisecond, func() { a.post(a.loadMore) })
 					return
 				}
-				a.gridErr = videoProblem(err, i18n.T("Couldn’t load this page"))
+				// A later page that didn’t come keeps what already shows,
+				// instead of clearing it for an error.
+				if len(a.items) == 0 {
+					a.gridErr = videoProblem(err, i18n.T("Couldn’t load this page"))
+				}
 				log.Printf("list %s/%s page %d: %v", src.id, a.tabID, next, err)
 				if macBlocked(err) {
 					a.macRetry = func() { a.loadTab() }

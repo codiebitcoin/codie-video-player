@@ -9,7 +9,10 @@
 
 const PER_PAGE = 20;
 // Inside the host's own 30s call window, so yt-dlp's own complaint// surfaces rather than the host cutting the call off.
+// A list is a flat search and comes back quickly; a play reads every
+// format, which takes longer, so it gets its own.
 const TIMEOUT = 25000;
+const PLAY_TIMEOUT = 60000;
 
 // url is a video's address on YouTube.
 function url(id) {
@@ -35,7 +38,15 @@ const installed = {};
 // so plainly.
 async function program(name, versionFlag) {
   if (installed[name]) return installed[name];
-  const places = [name, `/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`];
+  // The app's own copy comes first: resources/bin, which ships per platform.
+  // Windows finds the program of a path without its .exe.
+  const home = (typeof host.resourcesDir === "function" && host.resourcesDir()) || "";
+  const places = [
+    home && `${home}/bin/${name}`,
+    name,
+    `/opt/homebrew/bin/${name}`,
+    `/usr/local/bin/${name}`,
+  ].filter(Boolean);
   for (const path of places) {
     try {
       const proc = host.spawn(path, [versionFlag]);
@@ -57,7 +68,7 @@ async function program(name, versionFlag) {
 // ytdlp runs yt-dlp with args and answers its last stdout line, which is
 // where its JSON lands. What went wrong comes out as an Error with the
 // program's own complaint.
-async function ytdlp(args) {
+async function ytdlp(args, timeout = TIMEOUT) {
   const ytdlp = await program("yt-dlp", "--version");
   if (!ytdlp) {
     throw fail("unavailable", "yt-dlp is not installed on this machine");
@@ -65,7 +76,7 @@ async function ytdlp(args) {
   const full = ["--no-warnings", "--no-progress", "--no-playlist", ...args];
   const proc = host.spawn(ytdlp, full);
   proc.closeStdin();
-  const timer = setTimeout(() => proc.kill(), TIMEOUT);
+  const timer = setTimeout(() => proc.kill(), timeout);
   const lines = [];
   for (let line; (line = await proc.readLine()) !== null; ) lines.push(line);
   const code = await proc.wait();
@@ -127,6 +138,10 @@ const FEEDS = [
 // a chip doesn't run yt-dlp again for the same one.
 const feedFresh = 120000;
 
+// feedDepth is how many a chip asks for at once. A page shows PER_PAGE, and
+// asking for far more is what makes a chip slow: yt-dlp reads every one.
+const feedDepth = PER_PAGE * 2;
+
 let feedCache = null; // { at, tab, entries }
 
 async function feed(tab) {
@@ -135,7 +150,7 @@ async function feed(tab) {
   if (feedCache && feedCache.tab === tab && Date.now() - feedCache.at < feedFresh) {
     return feedCache.entries;
   }
-  const j = await ytdlp(["--flat-playlist", "--dump-single-json", `ytsearch100:${chip.query}`]);
+  const j = await ytdlp(["--flat-playlist", "--dump-single-json", `ytsearch${feedDepth}:${chip.query}`]);
   const entries = (j.entries || []).filter(playable);
   feedCache = { at: Date.now(), tab, entries };
   return entries;
@@ -171,7 +186,7 @@ export async function videoSearch({ query, offset }) {
 
 // videoItem is a video and its one episode, itself.
 export async function videoItem({ id }) {
-  const j = await ytdlp(["--dump-single-json", url(id)]);
+  const j = await ytdlp(["--dump-single-json", url(id)], PLAY_TIMEOUT);
   return {
     id: String(id),
     title: j.title || id,
@@ -208,7 +223,7 @@ function pick(formats) {
 // YouTube serves picture and sound together, the two apart otherwise, for
 // the app to join.
 export async function videoPlay({ id }) {
-  const j = await ytdlp(["--dump-single-json", url(id)]);
+  const j = await ytdlp(["--dump-single-json", url(id)], PLAY_TIMEOUT);
   if (!playable(j)) {
     throw fail("unavailable", "live streams can't be played here");
   }

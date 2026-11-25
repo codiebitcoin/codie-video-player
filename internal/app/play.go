@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	mygovideo "github.com/egoist/mygo/ui/video"
 
@@ -29,19 +31,19 @@ const ffmpegTimeout = 10 * time.Minute
 // openEpisodeStream opens what an episode plays through. The second answer is
 // a file made for the player, which the caller gives up when another comes.
 // It's a variable so tests can put a fake in.
-	var openEpisodeStream = func(s *video.Stream) (*ui.VideoPlayer, string, error) {
-		switch {
-		case s.Type == "file":
-			// A file on this machine plays as it is; the proxy never sees it.
-			p, err := mygovideo.Open(s.URL)
-			return p, "", err
-		case s.AudioURL != "", len(s.Headers) > 0, s.Type == "hls" && runtime.GOOS == "linux":
-			return throughFFmpeg(s)
-		default:
-			p, err := mygovideo.OpenURL(s.URL)
-			return p, "", err
-		}
+var openEpisodeStream = func(s *video.Stream) (*ui.VideoPlayer, string, error) {
+	switch {
+	case s.Type == "file":
+		// A file on this machine plays as it is; the proxy never sees it.
+		p, err := mygovideo.Open(s.URL)
+		return p, "", err
+	case s.AudioURL != "", len(s.Headers) > 0, s.Type == "hls" && runtime.GOOS == "linux":
+		return throughFFmpeg(s)
+	default:
+		p, err := mygovideo.OpenURL(s.URL)
+		return p, "", err
 	}
+}
 
 // throughFFmpeg makes the episode into one mp4 for the player: one whose
 // picture and sound are apart gets them joined, and one the system won't
@@ -118,14 +120,37 @@ func ffmpegHeaders(headers map[string]string) string {
 	return b.String()
 }
 
-// findFFmpeg finds ffmpeg: on PATH, then the usual places.
+// findFFmpeg finds ffmpeg: the one the app ships, then one on PATH, then
+// the usual places.
 func findFFmpeg() string {
+	if p := bundledProgram("ffmpeg"); p != "" {
+		return p
+	}
 	if p, err := exec.LookPath("ffmpeg"); err == nil {
 		return p
 	}
 	for _, p := range []string{"/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"} {
 		if _, err := os.Stat(p); err == nil {
 			return p
+		}
+	}
+	return ""
+}
+
+// bundledProgram is a program the app ships, bin/<name> of its resources,
+// or "" when this build ships none. Windows finds it without the .exe.
+func bundledProgram(name string) string {
+	dir, err := mygo.App.Path(mygo.PathResources)
+	if err != nil {
+		return ""
+	}
+	p := filepath.Join(dir, "bin", name)
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	if runtime.GOOS == "windows" {
+		if _, err := os.Stat(p + ".exe"); err == nil {
+			return p + ".exe"
 		}
 	}
 	return ""

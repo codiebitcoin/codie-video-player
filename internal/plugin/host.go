@@ -25,6 +25,7 @@ import (
 
 	"github.com/MoeForge/moejs"
 	"github.com/MoeForge/moejs/webapi"
+	"github.com/egoist/mygo"
 
 	"codie-video-player/internal/i18n"
 	"codie-video-player/internal/proxy"
@@ -172,6 +173,15 @@ func (p *Plugin) installHost(v *vm) error {
 		"waitForRedirect": moejs.NativeFunc(p.waitForRedirect(v)),
 		"webSignIn":       moejs.NativeFunc(p.webSignIn(v)),
 		"spawn":           moejs.NativeFunc(p.spawn(v)),
+		// resourcesDir is where the app keeps the programs it ships, bin/<name>,
+		// so a plugin starts those before looking for one on the machine.
+		"resourcesDir": moejs.NativeFunc(func(*moejs.Realm, moejs.Value, []moejs.Value) (moejs.Value, error) {
+			dir, err := mygo.App.Path(mygo.PathResources)
+			if err != nil {
+				return moejs.String(""), nil
+			}
+			return moejs.String(dir), nil
+		}),
 	})
 }
 
@@ -347,6 +357,19 @@ func (v *vm) killPrograms() {
 	}
 }
 
+// bundledProgram reports whether command is one of the programs the app ships,
+// bin/<name> of its resources. A plugin may start those whatever its own
+// process permission lists, so a build for another platform still plays.
+func bundledProgram(command string) bool {
+	dir, err := mygo.App.Path(mygo.PathResources)
+	if err != nil {
+		return false
+	}
+	bin := filepath.Clean(filepath.Join(dir, "bin"))
+	clean := filepath.Clean(command)
+	return clean == bin || strings.HasPrefix(clean, bin+string(filepath.Separator))
+}
+
 // spawn starts a program, by a path from the plugin's directory or absolute,
 // or a name on PATH, for a plugin whose process permission names it, once the
 // listener granted it. It ends
@@ -371,7 +394,7 @@ func (p *Plugin) spawn(v *vm) native {
 		if !filepath.IsAbs(command) && strings.ContainsAny(command, `/\`) {
 			command = filepath.Join(p.dir, command)
 		}
-		if !programs.Allows(p.dir, command) {
+		if !programs.Allows(p.dir, command) && !bundledProgram(command) {
 			return moejs.Undefined(), fmt.Errorf("%s isn't one of the programs in the plugin's process permission", moejs.Arg(args, 0).String())
 		}
 		cmd := exec.Command(command, cmdArgs...)
