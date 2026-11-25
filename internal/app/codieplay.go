@@ -950,6 +950,16 @@ func (a *app) codiePoll(sessionID string) {
 			st, err := a.codie.MediaSessionState(sessionID)
 			if err != nil {
 				log.Printf("codie poll: %v", err)
+				// A session the device no longer knows is one that has ended:
+				// the next segment, or the next episode, goes on from here.
+				a.post(func() {
+					if a.codieSession == sessionID {
+						a.codieSession = ""
+						a.codieState = nil
+						a.codieAdvance()
+					}
+				})
+				return
 			} else {
 				a.post(func() {
 					if a.codieSession == sessionID {
@@ -1062,6 +1072,13 @@ func (a *app) codieEnded() {
 	if a.codieSegAt >= 0 && a.codieSegAt < len(a.codieSegs) && st.DurationMS > 0 {
 		a.codieUpdateSegmentDuration(a.codieSegAt, st.DurationMS)
 	}
+	a.codieAdvance()
+}
+
+// codieAdvance goes on from the segment that's over: to the next segment, to
+// waiting for it while it's still being made, or to the next episode's
+// countdown when there is nothing after this.
+func (a *app) codieAdvance() {
 	if a.codieSegAt+1 < len(a.codieSegs) {
 		if !a.codieSwitchingSeg {
 			a.codieSwitchingSeg = true
