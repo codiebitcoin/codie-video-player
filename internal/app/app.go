@@ -469,12 +469,14 @@ func (a *app) loadAccount(ask bool) {
 			if a.sourceEntry == nil || a.sourceEntry.plugin != p {
 				return // another source is showing by now
 			}
-			// Signed out, or the ask failed: nothing to show. A fresh switch
-			// then asks for the sign-in, once the first run's hello is past.
+			// Signed out, or the ask failed: nothing to show. A source asks
+			// for its sign-in once, once the first run's hello is past; the
+			// sidebar's own button stays the way in after that.
 			if err != nil || me.ID == "" {
 				a.srcAcct = nil
-				if ask && a.settings.WizardDone {
+				if ask && a.settings.WizardDone && !a.signInAsked(p.Info().ID) {
 					a.askSignIn = true
+					a.markSignInAsked(p.Info().ID)
 				}
 				return
 			}
@@ -482,6 +484,26 @@ func (a *app) loadAccount(ask bool) {
 			a.askSignIn = false
 		})
 	}()
+}
+
+// signInAsked reports whether a source's sign-in was already asked for.
+func (a *app) signInAsked(id string) bool {
+	for _, d := range a.settings.SignInAsked {
+		if d == id {
+			return true
+		}
+	}
+	return false
+}
+
+// markSignInAsked remembers that a source's sign-in was asked for, so it
+// isn't asked again.
+func (a *app) markSignInAsked(id string) {
+	if a.signInAsked(id) {
+		return
+	}
+	a.settings.SignInAsked = append(a.settings.SignInAsked, id)
+	a.settings.save()
 }
 
 // startSignIn asks the showing source's plugin to sign the listener in,
@@ -1216,6 +1238,9 @@ type settings struct {
 	// SourcesChosen marks a settings file that names its sources, so a first
 	// run can start Huangguo off without turning it off again later.
 	SourcesChosen bool `json:"sourcesChosen,omitempty"`
+	// SignInAsked are the sources whose sign-in was already asked for. A
+	// source asks once; after that the sidebar's own button is the way in.
+	SignInAsked []string `json:"signInAsked,omitempty"`
 	// Language is what the app's words read in: system, en or zh-CN.
 	Language string `json:"language,omitempty"`
 	path     string

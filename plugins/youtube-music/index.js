@@ -158,14 +158,28 @@ async function feed(tab) {
 
 // videoTabs: the chips the sidebar lists. Live streams stay out: a live
 // one has no stream this player can take, so it would only fail to play.
+// Signed in, the listener's own playlists come after the chips.
 export async function videoTabs() {
-  return FEEDS.map((f) => ({ id: f.id, label: t(f.label) }));
+  const tabs = FEEDS.map((f) => ({ id: f.id, label: t(f.label) }));
+  if (!signedIn()) return tabs;
+  tabs.push({ id: "watchlater", label: t("Watch Later") });
+  try {
+    for (const list of await playlists()) {
+      tabs.push({ id: `pl:${list.id}`, label: list.title });
+    }
+  } catch (e) {
+    console.warn(`videoTabs: playlists: ${e.message}`);
+  }
+  return tabs;
 }
 
 // videoList is a page of what a chip lists, pages cut out of what its feed
 // gave, pages from one.
 export async function videoList({ tab, page }) {
   const n = Math.max(1, +page || 1);
+  if (tab === "watchlater" || String(tab || "").startsWith("pl:")) {
+    return playlistPage(String(tab), n);
+  }
   const entries = await feed(String(tab || ""));
   return {
     items: entries.slice((n - 1) * PER_PAGE, n * PER_PAGE).map(itemOf),
@@ -235,4 +249,85 @@ export async function videoPlay({ id }) {
   return picked.audioUrl
     ? { url: picked.url, audioUrl: picked.audioUrl, type }
     : { url: picked.url, type };
+}
+
+// ---------------------------------------------------------------------------
+// Account. Signing in is on YouTube's own page, once; the cookies it leaves
+// are what the lists of the listener's own come from.
+
+const signedIn = () => !!host.storage.get("cookie");
+
+// cookiesFile writes the saved cookies as Netscape's own file, which yt-dlp
+// reads, and answers its path. Nothing saved, it answers nothing.
+function cookiesFile() {
+  const raw = host.storage.get("cookie");
+  if (!raw) return "";
+  const lines = ["# Netscape HTTP Cookie File"];
+  for (const part of String(raw).split(";")) {
+    const at = part.indexOf("=");
+    if (at <= 0) continue;
+    const name = part.slice(0, at).trim();
+    const value = part.slice(at + 1).trim();
+    lines.push(`.youtube.com\tTRUE\t/\tTRUE\t0\t${name}\t${value}`);
+  }
+  host.writeFile("cookies.txt", lines.join("\n") + "\n");
+  return `${host.dataDir}/cookies.txt`;
+}
+
+// ytdlpMine runs yt-dlp as the listener, with their cookies, when they signed in.
+async function ytdlpMine(args, timeout) {
+  const file = cookiesFile();
+  const withCookies = file ? ["--cookies", file, ...args] : args;
+  return ytdlp(withCookies, timeout);
+}
+
+// account is who the listener is on YouTube, for the sidebar. Signed out, it
+// answers nothing, which is what asks for the sign-in.
+export async function account() {
+  if (!signedIn()) return null;
+  const saved = host.storage.get("account");
+  if (saved && saved.name) return saved;
+  return { id: "youtube", name: "YouTube" };
+}
+
+// signIn opens YouTube's own sign-in page. It's done once the login cookies
+// are there, and they're kept, so it isn't asked again.
+export async function signIn() {
+  const { cookie } = await host.webSignIn({
+    url: "https://accounts.google.com/ServiceLogin?service=youtube&continue=https://www.youtube.com/",
+    cookiesOf: "https://www.youtube.com/",
+    until: ["SID", "SAPISID"],
+  });
+  host.storage.set("cookie", cookie);
+  playlistCache = null;
+  const me = { id: "youtube", name: "YouTube" };
+  host.storage.set("account", me);
+  return me;
+}
+
+let playlistCache = null; // { at, lists }
+
+// playlists are the listener's own, the ones the sidebar lists under their
+// name. Watch Later is its own chip, so it isn't one of them.
+async function playlists() {
+  if (playlistCache && Date.now() - playlistCache.at < feedFresh) return playlistCache.lists;
+  const j = await ytdlpMine(["--flat-playlist", "--dump-single-json", "https://www.youtube.com/feed/playlists"]);
+  const lists = (j.entries || [])
+    .filter((e) => e && e.id && e.id !== "WL")
+    .map((e) => ({ id: e.id, title: (e.title || e.id).replace(/\s+/g, " ").trim() }));
+  playlistCache = { at: Date.now(), lists };
+  return lists;
+}
+
+// playlistPage is one page of a playlist, or of Watch Later.
+async function playlistPage(tab, page) {
+  const address = tab === "watchlater"
+    ? "https://www.youtube.com/playlist?list=WL"
+    : `https://www.youtube.com/playlist?list=${tab.slice(3)}`;
+  const j = await ytdlpMine(["--flat-playlist", "--dump-single-json", address]);
+  const entries = (j.entries || []).filter(playable);
+  return {
+    items: entries.slice((page - 1) * PER_PAGE, page * PER_PAGE).map(itemOf),
+    more: page * PER_PAGE < entries.length,
+  };
 }

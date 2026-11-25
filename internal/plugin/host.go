@@ -162,6 +162,19 @@ func (p *Plugin) installHost(v *vm) error {
 				return val, nil
 			}),
 		},
+		// writeFile writes text into the plugin's own data, for a file a
+		// program it starts reads, such as cookies. Nothing outside that folder.
+		"writeFile": moejs.NativeFunc(func(_ *moejs.Realm, _ moejs.Value, args []moejs.Value) (moejs.Value, error) {
+			name := moejs.Arg(args, 0).String()
+			if !filepath.IsLocal(name) || filepath.Clean(name) == "." {
+				return moejs.Undefined(), fmt.Errorf("not a file of the plugin's data: %s", name)
+			}
+			path := filepath.Join(p.data, name)
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				return moejs.Undefined(), err
+			}
+			return moejs.Undefined(), os.WriteFile(path, []byte(moejs.Arg(args, 1).String()), 0o600)
+		}),
 		"removeDataDir": moejs.NativeFunc(func(_ *moejs.Realm, _ moejs.Value, args []moejs.Value) (moejs.Value, error) {
 			name := moejs.Arg(args, 0).String()
 			// Only something within its own data, and not all of it, which holds ours.
