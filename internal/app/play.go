@@ -137,20 +137,23 @@ func findFFmpeg() string {
 	return ""
 }
 
-// bundledProgram is a program the app ships, bin/<name> of its resources,
-// or "" when this build ships none. Windows finds it without the .exe.
+// bundledProgram is a program the app ships, or "" when this build ships
+// none. It looks in bin/ first, then beside the resources themselves: a
+// Windows build lays a helper next to the executable. Windows finds it
+// without the .exe.
 func bundledProgram(name string) string {
 	dir, err := mygo.App.Path(mygo.PathResources)
 	if err != nil {
 		return ""
 	}
-	p := filepath.Join(dir, "bin", name)
-	if _, err := os.Stat(p); err == nil {
-		return p
-	}
-	if runtime.GOOS == "windows" {
-		if _, err := os.Stat(p + ".exe"); err == nil {
-			return p + ".exe"
+	for _, p := range []string{filepath.Join(dir, "bin", name), filepath.Join(dir, name)} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+		if runtime.GOOS == "windows" {
+			if _, err := os.Stat(p + ".exe"); err == nil {
+				return p + ".exe"
+			}
 		}
 	}
 	return ""

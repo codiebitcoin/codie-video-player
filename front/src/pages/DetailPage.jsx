@@ -1,16 +1,17 @@
 import { useEffect, useState } from 'react'
-import { get, post, coverUrl } from '../api.js'
+import { coverUrl, get, post } from '../api.js'
 import { t } from '../i18n.js'
 import { navigate } from '../App.jsx'
 
-// 详情页：海报、简介、追剧按钮、一集一个按钮。有进度的一集带"继续"。
 export default function DetailPage({ src, id }) {
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
   const [followed, setFollowed] = useState(false)
 
   const load = () => {
-    get(`/api/video/${src}/${encodeURIComponent(id)}`)
+    setErr('')
+    setData(null)
+    get(`/api/video/${encodeURIComponent(src)}/${encodeURIComponent(id)}`)
       .then((d) => {
         setData(d)
         setFollowed(!!d.followed)
@@ -21,79 +22,103 @@ export default function DetailPage({ src, id }) {
 
   if (err) {
     return (
-      <div className="page-center">
-        <div className="hint">{err}</div>
+      <div className="hint pad">
+        <div>{err}</div>
         <button className="btn" onClick={load}>
-          {t('retry')}
+          {t('Retry')}
         </button>
       </div>
     )
   }
-  if (!data) return <div className="page-center hint">{t('loading')}</div>
+  if (!data?.video) return <div className="hint pad">{t('Loading')}</div>
 
   const v = data.video
+  const eps = v.episodes || []
   const prog = data.progress
-  const firstUnfinished = prog && !prog.done && (prog.epAt > 0 || prog.pos > 0) ? prog.epAt : 0
+  let playAt = 0
+  let label = eps.length > 1 ? t('Play Episode 1') : t('Play')
+  if (prog && !prog.done && prog.pos > 10) {
+    const i = eps.findIndex((e) => e.id === prog.epId)
+    if (i >= 0) playAt = i
+    label = t('Continue · Ep %d', playAt + 1)
+  }
+  const meta = [v.subtitle, v.year > 0 ? String(v.year) : '', v.finished ? t('Completed') : eps.length ? t('Ongoing') : '']
+    .filter(Boolean)
+    .join(' · ')
+
+  const watch = (ep) => {
+    if (!ep) return
+    navigate(`/watch/${encodeURIComponent(src)}/${encodeURIComponent(id)}/${encodeURIComponent(ep.id)}`)
+  }
 
   return (
-    <div className="shell">
-      <header className="topbar">
-        <button className="chip" onClick={() => navigate('/')}>
-          ← {t('back')}
-        </button>
-      </header>
+    <div className="detail-page">
       <div className="detail">
-        <div className="detail-poster">
-          <img src={coverUrl(v.cover)} alt="" />
-        </div>
+        <div className="detail-poster">{v.cover ? <img src={coverUrl(v.cover)} alt="" /> : <span className="ph">■</span>}</div>
         <div className="detail-info">
           <h1>{v.title}</h1>
-          <div className="detail-meta">
-            {v.year > 0 && <span>{v.year}</span>}
-            {v.score && <span>评分 {v.score}</span>}
-            {v.finished && <span>完结</span>}
-            <span>共 {v.episodes?.length || 0} 集</span>
-          </div>
-          {v.intro && <p className="detail-intro">{v.intro}</p>}
+          {meta && <div className="detail-meta">{meta}</div>}
           <div className="detail-actions">
+            {v.score && <span className="score">{t('Score %s', v.score)}</span>}
             <button
-              className="btn btn-accent"
-              onClick={() =>
-                navigate(
-                  `/watch/${src}/${encodeURIComponent(id)}/${encodeURIComponent(
-                    v.episodes[firstUnfinished]?.id || v.episodes?.[0]?.id || '',
-                  )}`,
-                )
-              }
-            >
-              {prog && prog.pos > 10 && !prog.done
-                ? `▶ ${t('resume', prog.pos)}`
-                : `▶ ${t('play')}`}
-            </button>
-            <button
-              className={'chip' + (followed ? ' chip-on' : '')}
+              className={'chip follow' + (followed ? ' on' : '')}
               onClick={async () => {
-                const d = await post('/api/follow', { item: { id: v.id, source: v.source, title: v.title, cover: v.cover } })
+                const d = await post('/api/follow', {
+                  item: { id: v.id, source: src, title: v.title, cover: v.cover, subtitle: v.subtitle, year: v.year },
+                })
                 setFollowed(!!d.followed)
               }}
             >
-              {followed ? t('followingOn') : t('follow')}
+              {followed ? t('Following') : t('Follow')}
             </button>
           </div>
+          {v.intro && <p className="detail-intro">{v.intro}</p>}
+          {eps.length > 0 && (
+            <button className="btn accent" onClick={() => watch(eps[playAt] || eps[0])}>
+              ▶ {label}
+            </button>
+          )}
         </div>
       </div>
-      <div className="episodes">
-        {(v.episodes || []).map((ep, i) => (
-          <button
-            key={ep.id}
-            className={'ep-btn' + (prog && prog.epAt === i ? ' ep-on' : '')}
-            disabled={ep.unavailable}
-            onClick={() => navigate(`/watch/${src}/${encodeURIComponent(id)}/${encodeURIComponent(ep.id)}`)}
-          >
-            {ep.title || t('ep', i + 1)}
-          </button>
-        ))}
+
+      <div className="ep-head">
+        <h2>{t('Episodes')}</h2>
+        <span className="hint">{t('%d episodes', eps.length)}</span>
       </div>
+      {eps.length === 0 ? (
+        <div className="hint pad">{t('No playable episodes for this drama')}</div>
+      ) : eps.length > 60 ? (
+        <div className="ep-list">
+          {eps.map((ep, i) => (
+            <button key={ep.id + i} className={prog?.epId === ep.id ? 'on' : ''} disabled={ep.unavailable} onClick={() => watch(ep)}>
+              <span>
+                {i + 1} {ep.title || t('Ep %d', i + 1)}
+              </span>
+              {ep.seconds > 0 && <em>{clock(ep.seconds)}</em>}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="episodes">
+          {eps.map((ep, i) => (
+            <button key={ep.id + i} className={'ep-btn' + (prog?.epId === ep.id ? ' on' : '')} disabled={ep.unavailable} onClick={() => watch(ep)}>
+              <span>{ep.title || t('Ep %d', i + 1)}</span>
+              {prog?.epId === ep.id && prog.pos > 10 && !prog.done ? (
+                <em>{clock(prog.pos)}</em>
+              ) : ep.seconds > 0 ? (
+                <em>{clock(ep.seconds)}</em>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
+}
+
+function clock(sec) {
+  sec = Math.max(0, Math.round(sec))
+  const m = Math.floor(sec / 60)
+  const s = sec % 60
+  return `${m}:${String(s).padStart(2, '0')}`
 }

@@ -38,11 +38,12 @@ const installed = {};
 // so plainly.
 async function program(name, versionFlag) {
   if (installed[name]) return installed[name];
-  // The app's own copy comes first: resources/bin, which ships per platform.
-  // Windows finds the program of a path without its .exe.
+  // The app's own copy comes first. A helper sits in bin/, or, on Windows,
+  // beside the resources themselves. Windows finds a path without its .exe.
   const home = (typeof host.resourcesDir === "function" && host.resourcesDir()) || "";
   const places = [
     home && `${home}/bin/${name}`,
+    home && `${home}/${name}`,
     name,
     `/opt/homebrew/bin/${name}`,
     `/usr/local/bin/${name}`,

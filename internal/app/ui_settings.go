@@ -179,15 +179,7 @@ func (a *app) settingsContent(c *ui.Context) {
 						a.settingsRow(c, i18n.T("Tool Calls Served"), fmt.Sprintf("%d", n), nil)
 					}
 				})
-				a.settingsSection(c, i18n.T("Sources"), func() {
-					on := !a.sourceDisabled("huangguo")
-					a.settingsRow(c, i18n.T("Huangguo Dramas"), i18n.T("Ships with the app; off until you turn it on"), func() {
-						if ui.Switch(c.Key("src-huangguo"), &on).Changed() {
-							a.setSourceDisabled("huangguo", !on)
-						}
-					})
-				})
-				a.settingsSection(c, i18n.T("Plugins"), func() {
+					a.settingsSection(c, i18n.T("Plugins"), func() {
 					for _, p := range a.plugins {
 						info := p.Info()
 						on := !a.pluginDisabled(info.ID)

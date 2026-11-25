@@ -1,6 +1,6 @@
 // Package video is what the player knows of videos: dramas, episodes and the
 // like, whichever source they came from, and what a source has to do. A
-// source is either built in, like the Huangguo client, or a plugin: see
+// source is either built in, like the local folders, or a plugin: see
 // internal/plugin.
 package video
 

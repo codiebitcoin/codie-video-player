@@ -10,7 +10,12 @@ RUN npm run build
 
 FROM golang:1.27-alpine AS build
 WORKDIR /app
+# GOPROXY is overridable: the default module proxy is fine on GitHub-hosted
+# runners, and a desk that can't reach it passes its own.
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 COPY go.mod go.sum ./
+COPY third_party/ ./third_party/
 RUN go mod download
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
@@ -18,8 +23,10 @@ COPY --from=front /app/front/dist ./cmd/web/dist
 RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /out/codie-video-web ./cmd/web
 
 FROM alpine:3.21
+ARG VERSION=dev
 RUN apk add --no-cache ca-certificates tzdata ffmpeg yt-dlp curl
 WORKDIR /app
+ENV VERSION=${VERSION}
 COPY --from=build /out/codie-video-web ./codie-video-web
 COPY plugins ./plugins
 RUN mkdir -p /app/data

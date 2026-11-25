@@ -370,17 +370,18 @@ func (v *vm) killPrograms() {
 	}
 }
 
-// bundledProgram reports whether command is one of the programs the app ships,
-// bin/<name> of its resources. A plugin may start those whatever its own
-// process permission lists, so a build for another platform still plays.
+// bundledProgram reports whether command is one of the programs the app ships.
+// They sit in bin/, or, on Windows, beside the resources themselves. A plugin
+// may start those whatever its own process permission lists, so a build for
+// another platform still plays.
 func bundledProgram(command string) bool {
 	dir, err := mygo.App.Path(mygo.PathResources)
 	if err != nil {
 		return false
 	}
-	bin := filepath.Clean(filepath.Join(dir, "bin"))
+	dir = filepath.Clean(dir)
 	clean := filepath.Clean(command)
-	return clean == bin || strings.HasPrefix(clean, bin+string(filepath.Separator))
+	return clean == dir || strings.HasPrefix(clean, dir+string(filepath.Separator))
 }
 
 // spawn starts a program, by a path from the plugin's directory or absolute,

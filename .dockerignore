@@ -5,3 +5,6 @@ front/dist/
 cmd/web/dist
 .git
 *.md
+resources/
+codie-video-player
+icon/

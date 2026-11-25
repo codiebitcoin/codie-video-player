@@ -1,8 +1,10 @@
-// api 是网页对后端的所有话。没登录的回答（401）把页面带去登录。
+// api is everything the page says to the server. A 401 means the login has
+// gone; the shell shows the login itself.
 export class Unauthorized extends Error {}
 
 export async function api(path, opts = {}) {
   const res = await fetch(path, {
+    credentials: 'same-origin',
     headers: opts.body ? { 'Content-Type': 'application/json' } : {},
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
@@ -15,10 +17,10 @@ export async function api(path, opts = {}) {
   try {
     data = text ? JSON.parse(text) : null
   } catch {
-    // 非 JSON 的错误体（http.Error 直写的）
+    // http.Error writes a plain body.
   }
   if (!res.ok) {
-    throw new Error((data && data.error) || `请求失败（${res.status}）`)
+    throw new Error((data && data.error) || `HTTP ${res.status}`)
   }
   return data
 }
@@ -27,5 +29,13 @@ export const get = (path) => api(path)
 export const post = (path, body) => api(path, { method: 'POST', body })
 export const del = (path) => api(path, { method: 'DELETE' })
 
-export const coverUrl = (u) =>
-  u ? `/api/cover?u=${encodeURIComponent(u)}` : ''
+export const coverUrl = (u) => (u ? `/api/cover?u=${encodeURIComponent(u)}` : '')
+
+export function isPlaylistTab(id) {
+  return (
+    id === 'watchlater' ||
+    (id || '').startsWith('fav:') ||
+    (id || '').startsWith('season:') ||
+    (id || '').startsWith('dir:')
+  )
+}

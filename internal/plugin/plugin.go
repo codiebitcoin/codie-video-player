@@ -390,10 +390,31 @@ func Discover(dir, dataDir string) []*Plugin {
 			log.Printf("plugin: %v", err)
 			continue
 		}
-		plugins = append(plugins, p)
+			plugins = append(plugins, p)
+		}
+		remember(plugins)
+		return plugins
 	}
-	return plugins
-}
+
+	// loaded is the plugins Discover last handed back, so a picture fetch that
+	// isn't inside one plugin can still send the headers they asked for.
+	var (
+		loadedMu sync.Mutex
+		loaded   []*Plugin
+	)
+
+	func remember(plugins []*Plugin) {
+		loadedMu.Lock()
+		loaded = append([]*Plugin(nil), plugins...)
+		loadedMu.Unlock()
+	}
+
+	// Loaded is the plugins Discover last handed back.
+	func Loaded() []*Plugin {
+		loadedMu.Lock()
+		defer loadedMu.Unlock()
+		return append([]*Plugin(nil), loaded...)
+	}
 
 // Permissions are what plugin.json asks for.
 func (p *Plugin) Permissions() Permissions { return p.manifest.Permissions }

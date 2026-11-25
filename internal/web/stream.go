@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"codie-video-player/internal/i18n"
 	"codie-video-player/internal/video"
 )
 
@@ -138,7 +139,7 @@ func (m *sessionManager) start(so source, item video.Item, ep video.Episode, at 
 	}
 	stream, err := so.src.Play(item.ID, ep.ID)
 	if err != nil {
-		s.fail(videoProblem(err, "这一集放不了"))
+		s.fail(videoProblem(err, i18n.T("This episode won’t play")))
 		return s, nil
 	}
 	if stream == nil || stream.URL == "" {
@@ -279,7 +280,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	// The drama whole, for the episode's place in it, then the episode.
 	v, err := so.src.Video(q.Item)
 	if err != nil {
-		s.writeJSON(w, map[string]any{"error": videoProblem(err, "这部剧拿不到")})
+			s.writeJSON(w, map[string]any{"error": videoProblem(err, i18n.T("Couldn’t load this drama"))})
 		return
 	}
 	item, ep, at := video.Item{ID: q.Item, Source: q.Source}, video.Episode{ID: q.Ep}, 0

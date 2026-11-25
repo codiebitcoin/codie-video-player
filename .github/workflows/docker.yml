@@ -7,7 +7,9 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/codiebitcoin/codie-video-player
+  # Its own package. The desktop installers stay on the GitHub Release; this
+  # workflow only publishes the server image, and never opens a Release.
+  IMAGE: ghcr.io/codiebitcoin/codie-video-player-web
 
 jobs:
   build:
@@ -22,19 +24,23 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/metadata-action@v5
         id: meta
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
             type=semver,pattern={{version}}
+            type=sha,prefix=sha-,format=short
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+            GOPROXY=https://proxy.golang.org,direct
           cache-from: type=gha
           cache-to: type=gha,mode=max

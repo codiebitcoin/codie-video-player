@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -10,8 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"codie-video-player/internal/source/huangguo"
-)
+	)
 
 // pluginHeaders merges what every known plugin wants for the URL, for its
 // own hosts only.
@@ -36,6 +34,7 @@ var coverReferers = map[string]string{
 	"hdslb.com": "https://www.bilibili.com/",
 	"ytimg.com": "https://www.youtube.com/",
 	"ggpht.com": "https://www.youtube.com/",
+	"nimg.jp":   "https://www.nicovideo.jp/",
 }
 
 // coverClient fetches the pictures that don't need the built-in source's
@@ -128,26 +127,19 @@ func (c *coverCache) fetchCover(rawurl string) ([]byte, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return nil, errors.New("bad cover url")
 	}
-	headers := c.headers(u)
-	var matched bool
-	for host, referer := range coverReferers {
-		if strings.Contains(rawurl, host) {
-			matched = true
-			if headers == nil {
-				headers = map[string]string{}
+		headers := c.headers(u)
+		for host, referer := range coverReferers {
+			if strings.Contains(rawurl, host) {
+				if headers == nil {
+					headers = map[string]string{}
+				}
+				if _, ok := headers["Referer"]; !ok {
+					headers["Referer"] = referer
+				}
+				break
 			}
-			if _, ok := headers["Referer"]; !ok {
-				headers["Referer"] = referer
-			}
-			break
 		}
-	}
-	// A host nobody owns is the built-in source's, whose covers come
-	// scrambled and go through its own ways.
-	if !matched {
-		return huangguo.Cover(context.Background(), rawurl)
-	}
-	req, err := http.NewRequest(http.MethodGet, rawurl, nil)
+		req, err := http.NewRequest(http.MethodGet, rawurl, nil)
 	if err != nil {
 		return nil, err
 	}

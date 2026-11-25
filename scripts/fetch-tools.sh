@@ -57,7 +57,7 @@ one() {
 		unpack "$macffmpeg" ffmpeg resources/darwin/bin/ffmpeg ;;
 	windows-amd64)
 		fetch "$ytbase/yt-dlp.exe" resources/windows-amd64/bin/yt-dlp.exe
-		unpack "$ffbase/ffmpeg-master-latest-win64-gpl.zip" ffmpeg.exe resources/windows-amd64/ffmpeg.exe ;;
+		unpack "$ffbase/ffmpeg-master-latest-win64-gpl.zip" ffmpeg.exe resources/windows-amd64/bin/ffmpeg.exe ;;
 	linux-amd64)
 		fetch "$ytbase/yt-dlp_linux" resources/linux-amd64/bin/yt-dlp
 		unpack "$ffbase/ffmpeg-master-latest-linux64-gpl.tar.xz" ffmpeg resources/linux-amd64/bin/ffmpeg ;;

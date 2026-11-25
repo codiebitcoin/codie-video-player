@@ -10,19 +10,20 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"io/fs"
-
 	"codie-video-player/internal/i18n"
 	"codie-video-player/internal/library"
 	"codie-video-player/internal/plugin"
-	"codie-video-player/internal/source/huangguo"
+	"codie-video-player/internal/source/local"
 	"codie-video-player/internal/video"
 )
 
@@ -49,6 +50,8 @@ type Server struct {
 	version  string
 	sources  []source
 	plugins  []*plugin.Plugin
+	localSrc *local.Source
+	settings *settings
 	lib      *library.Library
 	auth     *auth
 	sessions *sessionManager
@@ -66,6 +69,8 @@ func New(opt Options) (*Server, error) {
 		auth:    newAuth(opt.AuthUser, opt.AuthPass),
 		static:  opt.Static,
 	}
+	s.settings = loadSettings(opt.DataDir)
+	i18n.SetLanguage(s.settings.Language)
 	// Plugins talk like the desktop's: no account sign-ins here either, and
 	// the version they ask about is ours.
 	plugin.SetOpenURL(func(string) error { return nil })
@@ -84,12 +89,17 @@ func New(opt Options) (*Server, error) {
 				log.Printf("web: granted process permission to %s", p.Info().ID)
 			}
 		}
-		if v := p.Video(); v != nil {
-			s.sources = append(s.sources, source{id: v.Info().ID, name: v.Info().Name, src: v})
-			s.plugins = append(s.plugins, p)
+		s.plugins = append(s.plugins, p)
+			if s.pluginDisabled(p.Info().ID) {
+				continue
+			}
+			if v := p.Video(); v != nil {
+				s.sources = append(s.sources, source{id: v.Info().ID, name: v.Info().Name, src: v})
+			}
 		}
-	}
-	s.sources = append([]source{{id: "huangguo", name: "黄果短剧", src: &huangguo.Source{}}}, s.sources...)
+		s.localSrc = &local.Source{Folders: append([]string(nil), s.settings.LocalFolders...)}
+		s.sources = append(s.sources, source{id: local.ID, name: i18n.T("Local"), src: s.localSrc})
+		s.orderSources()
 
 	var err error
 	if s.sessions, err = newSessionManager(filepath.Join(opt.DataDir, "tmp")); err != nil {
@@ -97,6 +107,40 @@ func New(opt Options) (*Server, error) {
 	}
 	s.covers = newCoverCache(s.pluginHeaders)
 	return s, nil
+}
+
+// orderSources puts the dropdown in the desktop's order: local folders, then
+// YouTube, then Bilibili, then NicoNico, then the other plugins, Huangguo last.
+func (s *Server) orderSources() {
+	slices.SortStableFunc(s.sources, func(x, y source) int {
+		rank := func(e source) int {
+			switch e.id {
+			case local.ID:
+				return 0
+			case "youtube":
+				return 1
+			case "bilibili":
+				return 2
+			case "niconico":
+				return 3
+			case "huangguo":
+				return 5
+			default:
+				return 4
+			}
+		}
+		return rank(x) - rank(y)
+	})
+}
+
+// pluginDisabled reports whether a plugin is turned off.
+func (s *Server) pluginDisabled(id string) bool {
+	for _, d := range s.settings.DisabledPlugins {
+		if d == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Handler is everything the server answers, in one handler.
@@ -121,9 +165,12 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/session/{id}/progress", s.handleProgress)
 	api.HandleFunc("GET /api/session/{id}/", s.handleSessionFiles)
 	api.HandleFunc("GET /api/history", s.handleHistory)
-	api.HandleFunc("GET /api/follows", s.handleFollows)
-	api.HandleFunc("POST /api/follow", s.handleFollow)
-	mux.Handle("/api/", s.auth.guard(api))
+		api.HandleFunc("GET /api/follows", s.handleFollows)
+		api.HandleFunc("POST /api/follow", s.handleFollow)
+		api.HandleFunc("GET /api/settings", s.handleSettingsGet)
+		api.HandleFunc("POST /api/settings", s.handleSettingsPost)
+		api.HandleFunc("POST /api/local/folder", s.handleLocalFolder)
+		mux.Handle("/api/", s.auth.guard(api))
 	// The web app's shell is public — it has nothing in it; the viewer's
 	// data lives behind the API, and the page itself shows the login when
 	// an ask comes back 401.
@@ -152,9 +199,13 @@ func (s *Server) staticHandler() http.Handler {
 func (s *Server) handleSources(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0, len(s.sources))
 	for _, so := range s.sources {
-		out = append(out, map[string]any{"id": so.id, "name": so.name})
+		out = append(out, map[string]any{
+			"id":     so.id,
+			"name":   so.name,
+			"search": so.src.Can("videoSearch"),
+		})
 	}
-	s.writeJSON(w, map[string]any{"sources": out})
+	s.writeJSON(w, map[string]any{"sources": out, "current": s.settings.Source})
 }
 
 func (s *Server) sourceOf(id string) *source {
@@ -174,8 +225,17 @@ func (s *Server) handleTabs(w http.ResponseWriter, r *http.Request) {
 	}
 	tabs, err := so.src.Tabs()
 	if err != nil {
-		s.writeJSON(w, map[string]any{"tabs": []video.Tab{}, "error": videoProblem(err, "拿不到分类")})
+		s.writeJSON(w, map[string]any{"tabs": []video.Tab{}, "error": videoProblem(err, i18n.T("Couldn’t load this source’s categories"))})
 		return
+	}
+	if tabs == nil {
+		tabs = []video.Tab{}
+	}
+	// The local source's chips are English keys; a plugin's come translated.
+	if so.id == local.ID {
+		for i := range tabs {
+			tabs[i].Label = i18n.T(tabs[i].Label)
+		}
 	}
 	s.writeJSON(w, map[string]any{"tabs": tabs})
 }
@@ -190,7 +250,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	page := atoiDefault(r.URL.Query().Get("page"), 1)
 	list, err := so.src.List(tab, page)
 	if err != nil {
-		s.writeJSON(w, map[string]any{"items": []video.Item{}, "error": videoProblem(err, "拿不到列表")})
+		s.writeJSON(w, map[string]any{"items": []video.Item{}, "error": videoProblem(err, i18n.T("Couldn’t load this page"))})
 		return
 	}
 	if list == nil {
@@ -234,7 +294,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			g := searchGroup{Source: so.id, Name: so.name}
 			res, err := so.src.Search(q, 0)
 			if err != nil {
-				g.Error = videoProblem(err, "搜索失败")
+				g.Error = videoProblem(err, i18n.T("Search failed"))
 			} else if res != nil {
 				g.Items = res.Items
 				for j := range g.Items {
@@ -269,7 +329,7 @@ func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	v, err := so.src.Video(id)
 	if err != nil {
-		s.writeJSON(w, map[string]any{"error": videoProblem(err, "这部剧拿不到")})
+		s.writeJSON(w, map[string]any{"error": videoProblem(err, i18n.T("Couldn’t load this drama"))})
 		return
 	}
 	if v == nil {
@@ -286,13 +346,148 @@ func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
 // ---- the viewer's own ----
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
-	_, history := s.lib.Snapshot()
+	src := r.URL.Query().Get("src")
+	var history []library.Watched
+	if src == "" || src == "all" {
+		_, history = s.lib.Snapshot()
+	} else {
+		_, history = s.lib.Of(src)
+	}
+	if history == nil {
+		history = []library.Watched{}
+	}
 	s.writeJSON(w, map[string]any{"history": history})
 }
 
 func (s *Server) handleFollows(w http.ResponseWriter, r *http.Request) {
-	follows, _ := s.lib.Snapshot()
+	src := r.URL.Query().Get("src")
+	var follows []library.Watched
+	if src == "" || src == "all" {
+		follows, _ = s.lib.Snapshot()
+	} else {
+		follows, _ = s.lib.Of(src)
+	}
+	if follows == nil {
+		follows = []library.Watched{}
+	}
 	s.writeJSON(w, map[string]any{"follows": follows})
+}
+
+func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, map[string]any{
+		"language":        s.settings.Language,
+		"source":          s.settings.Source,
+		"localFolders":    s.settings.LocalFolders,
+		"disabledPlugins": s.settings.DisabledPlugins,
+		"plugins":         s.pluginList(),
+		"languages": []map[string]string{
+			{"code": i18n.English, "name": "English"},
+			{"code": i18n.Chinese, "name": "简体中文"},
+			{"code": i18n.Japanese, "name": "日本語"},
+		},
+	})
+}
+
+func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
+		var q struct {
+		Language        *string  `json:"language"`
+		Source          *string  `json:"source"`
+		DisabledPlugins []string `json:"disabledPlugins"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
+		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		return
+	}
+	if q.Language != nil {
+		lang := *q.Language
+		if lang != i18n.English && lang != i18n.Chinese && lang != i18n.Japanese {
+			lang = i18n.English
+		}
+		s.settings.Language = lang
+		i18n.SetLanguage(lang)
+		for i := range s.sources {
+			if s.sources[i].id == local.ID {
+				s.sources[i].name = i18n.T("Local")
+			}
+		}
+	}
+	if q.Source != nil && s.sourceOf(*q.Source) != nil {
+		s.settings.Source = *q.Source
+	}
+		if q.DisabledPlugins != nil {
+			s.settings.DisabledPlugins = q.DisabledPlugins
+			s.rebuildSources()
+		}
+	s.settings.save()
+	s.handleSettingsGet(w, r)
+}
+
+// pluginList is every loaded plugin, on or off, for the settings page.
+func (s *Server) pluginList() []map[string]string {
+	out := make([]map[string]string, 0, len(s.plugins))
+	for _, p := range s.plugins {
+		info := p.Info()
+		out = append(out, map[string]string{"id": info.ID, "name": info.Name, "version": info.Version})
+	}
+	return out
+}
+
+// rebuildSources puts the source list back together after a plugin was turned
+// on or off, keeping the plugins already loaded.
+func (s *Server) rebuildSources() {
+	kept := make([]source, 0, len(s.sources))
+	for _, p := range s.plugins {
+		if s.pluginDisabled(p.Info().ID) {
+			continue
+		}
+		if v := p.Video(); v != nil {
+			kept = append(kept, source{id: v.Info().ID, name: v.Info().Name, src: v})
+		}
+	}
+	kept = append(kept, source{id: local.ID, name: i18n.T("Local"), src: s.localSrc})
+	s.sources = kept
+	s.orderSources()
+	if s.sourceOf(s.settings.Source) == nil && len(s.sources) > 0 {
+		s.settings.Source = s.sources[0].id
+	}
+}
+
+func (s *Server) handleLocalFolder(w http.ResponseWriter, r *http.Request) {
+	var q struct {
+		Path   string `json:"path"`
+		Remove bool   `json:"remove"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&q); err != nil || strings.TrimSpace(q.Path) == "" {
+		http.Error(w, `{"error":"bad path"}`, http.StatusBadRequest)
+		return
+	}
+	path := filepath.Clean(q.Path)
+	if !q.Remove {
+		info, err := os.Stat(path)
+		if err != nil || !info.IsDir() {
+			http.Error(w, `{"error":"not a folder"}`, http.StatusBadRequest)
+			return
+		}
+	}
+		kept := make([]string, 0, len(s.settings.LocalFolders)+1)
+		found := false
+		for _, have := range s.settings.LocalFolders {
+			if have == path {
+				found = true
+				if q.Remove {
+					continue
+				}
+			}
+			kept = append(kept, have)
+		}
+		folders := kept
+	if !q.Remove && !found {
+		folders = append(folders, path)
+	}
+	s.settings.LocalFolders = folders
+	s.localSrc.Folders = append([]string(nil), folders...)
+	s.settings.save()
+	s.writeJSON(w, map[string]any{"folders": folders})
 }
 
 func (s *Server) handleFollow(w http.ResponseWriter, r *http.Request) {
@@ -322,14 +517,12 @@ func videoProblem(err error, msg string) string {
 	switch {
 	case err == nil:
 		return ""
-	case errors.Is(err, video.ErrSignIn):
-		return "这个源要登录才能看"
-	case errors.Is(err, video.ErrSetup):
-		return "这个源还差一点设置"
-	case errors.Is(err, video.ErrUnavailable):
-		return "这一集现在看不了"
-	case errors.Is(err, video.ErrUnsupported):
-		return "这个源不支持这样做"
+	case errors.Is(err, video.ErrSignIn), errors.Is(err, video.ErrSetup),
+		errors.Is(err, video.ErrUnavailable), errors.Is(err, video.ErrUnsupported):
+		if reason := video.Reason(err); reason != "" {
+			return reason
+		}
+		return msg
 	}
 	return msg + ": " + err.Error()
 }

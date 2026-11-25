@@ -1283,7 +1283,15 @@ function reinstallFFmpeg(why) {
 async function ffmpeg() {
   if (ffmpegPath) return ffmpegPath;
   let broken = null;
-  for (const path of ["ffmpeg", "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]) {
+  const home = (typeof host.resourcesDir === "function" && host.resourcesDir()) || "";
+  const places = [
+    home && `${home}/bin/ffmpeg`,
+    home && `${home}/ffmpeg`,
+    "ffmpeg",
+    "/opt/homebrew/bin/ffmpeg",
+    "/usr/local/bin/ffmpeg",
+  ].filter(Boolean);
+  for (const path of places) {
     let proc;
     try {
       proc = host.spawn(path, ["-version"]);

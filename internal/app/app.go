@@ -23,7 +23,6 @@ import (
 	"codie-video-player/internal/library"
 	"codie-video-player/internal/plugin"
 	"codie-video-player/internal/proxy"
-	"codie-video-player/internal/source/huangguo"
 	"codie-video-player/internal/source/local"
 	"codie-video-player/internal/video"
 )
@@ -32,9 +31,9 @@ import (
 type app struct {
 	win *mygo.Window
 
-	// The sources of videos: the local folders first, then the plugins, the
-	// built-in Huangguo last. The one showing is embedded: what the grid holds
-	// is of it. localSrc is the local one, whose folders the settings keep.
+		// The sources of videos: the local folders first, then the plugins. The
+		// one showing is embedded: what the grid holds is of it. localSrc is the
+		// local one, whose folders the settings keep.
 	sources []sourceEntry
 	*sourceEntry
 	localSrc *local.Source
@@ -305,8 +304,9 @@ func Run(bundledPlugins embed.FS) error {
 // ---- the sources ----
 
 // makeSources lists where videos come from: the local folders first, then the
-// plugins that play videos, the built-in Huangguo last, the one last used
-// showing.
+// plugins that play videos, the one last used showing. A plugin the listener
+// turned off is still loaded, so the settings can turn it back on, but it
+// isn't a source until then.
 func (a *app) makeSources(bundledPlugins embed.FS) {
 	plugin.SetOpenURL(mygo.Shell.OpenExternal)
 	plugin.SetAppVersion(mygo.App.Version())
@@ -316,10 +316,6 @@ func (a *app) makeSources(bundledPlugins embed.FS) {
 	a.localSrc = &local.Source{Folders: append([]string(nil), a.settings.LocalFolders...)}
 	a.sources = []sourceEntry{
 		{id: local.ID, name: i18n.T("Local"), src: a.localSrc},
-	}
-	// Huangguo ships with the app and starts off; the settings turn it on.
-	if !a.sourceDisabled("huangguo") {
-		a.sources = append(a.sources, sourceEntry{id: "huangguo", name: "黄果短剧", src: &huangguo.Source{}})
 	}
 	for _, p := range a.plugins {
 		// The listener's yes is the default: a plugin's programs — ffmpeg,
@@ -332,13 +328,16 @@ func (a *app) makeSources(bundledPlugins embed.FS) {
 				log.Printf("granted process permission to %s", p.Info().ID)
 			}
 		}
+		if a.pluginDisabled(p.Info().ID) {
+			continue
+		}
 		if v := p.Video(); v != nil {
 			e := sourceEntry{id: v.Info().ID, name: v.Info().Name, src: v, plugin: p}
 			a.sources = append(a.sources, e)
 		}
 	}
 	// The dropdown reads: the local folders, then YouTube, then Bilibili,
-	// then the other plugins, the built-in source last.
+	// then NicoNico, then the other plugins, Huangguo last.
 	slices.SortStableFunc(a.sources, func(x, y sourceEntry) int {
 		rank := func(e sourceEntry) int {
 			switch e.id {
@@ -348,10 +347,12 @@ func (a *app) makeSources(bundledPlugins embed.FS) {
 				return 1
 			case "bilibili":
 				return 2
-			case "huangguo":
-				return 4
-			default:
+			case "niconico":
 				return 3
+			case "huangguo":
+				return 5
+			default:
+				return 4
 			}
 		}
 		return rank(x) - rank(y)
@@ -1232,12 +1233,13 @@ type settings struct {
 	// LocalFolders are the folders the local source plays, each one a group,
 	// in the order the viewer added them.
 	LocalFolders []string `json:"localFolders,omitempty"`
-	// DisabledSources are the built-in sources turned off. Huangguo starts off:
-	// it ships with the app, and comes on from the settings when wanted.
-	DisabledSources []string `json:"disabledSources,omitempty"`
-	// SourcesChosen marks a settings file that names its sources, so a first
-	// run can start Huangguo off without turning it off again later.
-	SourcesChosen bool `json:"sourcesChosen,omitempty"`
+		// DisabledSources are the built-in sources turned off. Kept so an older
+		// settings file still reads; Huangguo is a plugin now, and lives in
+		// DisabledPlugins.
+		DisabledSources []string `json:"disabledSources,omitempty"`
+		// SourcesChosen marks a settings file that names its sources, so a first
+		// run can start Huangguo off without turning it off again later.
+		SourcesChosen bool `json:"sourcesChosen,omitempty"`
 	// SignInAsked are the sources whose sign-in was already asked for. A
 	// source asks once; after that the sidebar's own button is the way in.
 	SignInAsked []string `json:"signInAsked,omitempty"`
@@ -1260,15 +1262,31 @@ func loadSettings() *settings {
 	if b, err := os.ReadFile(s.path); err == nil {
 		json.Unmarshal(b, s)
 	}
-	// A first run starts the built-in Huangguo off. It still ships with the
-	// app, and the settings turn it on.
-	if !s.SourcesChosen {
-		s.DisabledSources = append(s.DisabledSources, "huangguo")
-		s.SourcesChosen = true
-		s.save()
+		// A first run starts Huangguo off. It still ships with the app, as a
+		// plugin, and the settings turn it on. An older file that turned the
+		// built-in source off keeps it off, now as a plugin.
+		if !s.SourcesChosen {
+			if !containsString(s.DisabledPlugins, "huangguo") {
+				s.DisabledPlugins = append(s.DisabledPlugins, "huangguo")
+			}
+			s.SourcesChosen = true
+			s.save()
+		} else if containsString(s.DisabledSources, "huangguo") && !containsString(s.DisabledPlugins, "huangguo") {
+			s.DisabledPlugins = append(s.DisabledPlugins, "huangguo")
+			s.save()
+		}
+		return s
 	}
-	return s
-}
+
+	// containsString reports whether list holds s.
+	func containsString(list []string, s string) bool {
+		for _, v := range list {
+			if v == s {
+				return true
+			}
+		}
+		return false
+	}
 
 // pluginsDir is where plugins are dropped in.
 func pluginsDir() string { return userDataDir("plugins") }

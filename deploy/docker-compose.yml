@@ -1,6 +1,6 @@
 services:
   video:
-    image: ghcr.io/codiebitcoin/codie-video-player:latest
+    image: ghcr.io/codiebitcoin/codie-video-player-web:latest
     container_name: codie-video
     restart: unless-stopped
     ports:

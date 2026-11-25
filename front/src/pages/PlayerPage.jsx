@@ -1,61 +1,67 @@
 import Hls from 'hls.js'
 import { useEffect, useRef, useState } from 'react'
-import { get, post, del } from '../api.js'
+import { del, get, post } from '../api.js'
 import { t } from '../i18n.js'
 import { navigate } from '../App.jsx'
 
-// 播放页：后端把流做成 HLS，这里用 hls.js 播。倍速、自动连播、进度上报都在这。
-const rates = [2, 1.5, 1.25, 1, 0.75, 0.5]
+const rates = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
 export default function PlayerPage({ src, id, ep }) {
   const [detail, setDetail] = useState(null)
-  const [session, setSession] = useState(null) // {id, state, error}
+  const [session, setSession] = useState(null)
   const [rate, setRate] = useState(1)
   const [nextLeft, setNextLeft] = useState(0)
   const [fatal, setFatal] = useState('')
+  const [playing, setPlaying] = useState(false)
   const videoRef = useRef(null)
-  const progressTimer = useRef(null)
-  const nextTimer = useRef(null)
   const startedAt = useRef(false)
 
-  const i = detail ? detail.video.episodes.findIndex((e) => e.id === ep) : -1
   const eps = detail?.video?.episodes || []
-  const prev = i > 0 ? eps[i - 1] : null
-  const next = i >= 0 && i + 1 < eps.length ? eps[i + 1] : null
+  const index = eps.findIndex((e) => e.id === ep)
+  const prev = index > 0 ? eps[index - 1] : null
+  const nextEp = index >= 0 && index + 1 < eps.length ? eps[index + 1] : null
 
   useEffect(() => {
-    get(`/api/video/${src}/${encodeURIComponent(id)}`).then(setDetail)
+    get(`/api/video/${encodeURIComponent(src)}/${encodeURIComponent(id)}`)
+      .then(setDetail)
+      .catch((e) => setFatal(e.message))
   }, [src, id])
 
-  // 发起播放会话；换集就换会话。
   useEffect(() => {
     startedAt.current = false
     setFatal('')
+    setPlaying(false)
     let live = true
-    let sess = null
+    let sessId = ''
     post('/api/play', { source: src, item: id, ep })
       .then((d) => {
-        if (!live) return
-        sess = d
+        if (!live) {
+          if (d?.id) del(`/api/session/${d.id}`).catch(() => {})
+          return
+        }
+        sessId = d.id
         setSession(d)
+        if (d.error && d.state === 'error') setFatal(d.error)
       })
       .catch((e) => live && setFatal(e.message))
     return () => {
       live = false
-      if (sess) del(`/api/session/${sess.id}`).catch(() => {})
+      if (sessId) del(`/api/session/${sessId}`).catch(() => {})
       setSession(null)
     }
   }, [src, id, ep])
 
-  // hls.js 接到 <video> 上；会话没就绪就轮询。
   useEffect(() => {
-    if (!session) return
+    if (!session?.id || fatal) return
     const video = videoRef.current
     if (!video) return
     let hls = null
-    let poll = null
+    let wait = null
+    let stopped = false
 
     const attach = () => {
+      if (stopped || video.dataset.attached) return
+      video.dataset.attached = '1'
       const url = `/api/session/${session.id}/index.m3u8`
       if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = url
@@ -64,106 +70,94 @@ export default function PlayerPage({ src, id, ep }) {
         hls.loadSource(url)
         hls.attachMedia(video)
         hls.on(Hls.Events.ERROR, (_, data) => {
-          if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR && !poll) {
-            // 会话可能还在排队：playlist 404，等一会再试。
-            poll = setTimeout(attach, 1500)
-          } else if (data.fatal) {
-            setFatal('播放出错，稍后重试')
-          }
+          if (data.fatal) setFatal(t('Playback failed. Try again.'))
         })
       } else {
-        setFatal('这个浏览器播不了这个流')
+        setFatal(t('This browser can’t play this stream'))
       }
     }
 
-    const wait = setInterval(async () => {
+    const poll = async () => {
       const st = await get(`/api/session/${session.id}`).catch(() => null)
-      if (!st) return
+      if (stopped || !st) return
       setSession((old) => (old ? { ...old, state: st.state, error: st.error } : old))
-      if (st.state === 'ready' && !video.dataset.attached) {
-        video.dataset.attached = '1'
-        attach()
-        clearInterval(wait)
-      }
-      if (st.state === 'error') {
-        clearInterval(wait)
-        setFatal(st.error || t('error'))
-      }
-    }, 700)
+      if (st.state === 'ready') attach()
+      if (st.state === 'error') setFatal(st.error || t('Playback failed. Try again.'))
+      else wait = setTimeout(poll, st.state === 'ready' ? 4000 : 800)
+    }
+    poll()
 
     return () => {
-      clearInterval(wait)
-      if (poll) clearTimeout(poll)
+      stopped = true
+      if (wait) clearTimeout(wait)
       if (hls) hls.destroy()
       delete video.dataset.attached
     }
   }, [session?.id])
 
-  // 续播：metadata 一到，把进度 seek 过去。
   useEffect(() => {
     const video = videoRef.current
     if (!video || !detail?.progress) return
     const p = detail.progress
-    if (p.epId !== ep) return
+    if (p.epId !== ep || p.done || !(p.pos > 10)) return
     const onMeta = () => {
-      if (!startedAt.current && p.pos > 10 && !p.done) {
-        video.currentTime = p.pos - 2
+      if (!startedAt.current) {
+        video.currentTime = Math.max(0, p.pos - 2)
         startedAt.current = true
       }
     }
     video.addEventListener('loadedmetadata', onMeta)
     return () => video.removeEventListener('loadedmetadata', onMeta)
-  }, [detail, ep, session?.state])
+  }, [detail, ep, session?.id])
 
-  // 进度每 10 秒报一次，播完报 done。
   useEffect(() => {
-    if (!session) return
     const video = videoRef.current
-    if (!video) return
-    progressTimer.current = setInterval(() => {
-      if (video.currentTime > 0 && !video.paused) {
-        post(`/api/session/${session.id}/progress`, {
-          pos: video.currentTime,
-          dur: video.duration || 0,
-          done: false,
-        }).catch(() => {})
-      }
+    if (!video || !session?.id) return
+    const report = (done) => {
+      post(`/api/session/${session.id}/progress`, {
+        pos: video.currentTime || 0,
+        dur: Number.isFinite(video.duration) ? video.duration : 0,
+        done,
+      }).catch(() => {})
+    }
+    const timer = setInterval(() => {
+      if (video.currentTime > 0 && !video.paused) report(false)
     }, 10000)
     const onEnded = () => {
-      post(`/api/session/${session.id}/progress`, {
-        pos: video.duration || 0,
-        dur: video.duration || 0,
-        done: true,
-      }).catch(() => {})
-      if (next) {
-        setNextLeft(8)
-      }
+      report(true)
+      if (nextEp || queueNext()) setNextLeft(8)
     }
     video.addEventListener('ended', onEnded)
     return () => {
-      clearInterval(progressTimer.current)
+      clearInterval(timer)
       video.removeEventListener('ended', onEnded)
+      if (video.currentTime > 0) report(false)
     }
-  }, [session?.id, next])
+  }, [session?.id, nextEp, id])
 
-  // 连播倒计时。
   useEffect(() => {
     if (nextLeft <= 0) return
-    nextTimer.current = setTimeout(() => {
+    const timer = setTimeout(() => {
       if (nextLeft <= 1) {
         setNextLeft(0)
-        go(next)
-      } else {
-        setNextLeft(nextLeft - 1)
-      }
+        goNext()
+      } else setNextLeft(nextLeft - 1)
     }, 1000)
-    return () => clearTimeout(nextTimer.current)
+    return () => clearTimeout(timer)
   }, [nextLeft])
 
-  const go = (e) => {
-    if (!e) return
+  const go = (episode) => {
+    if (!episode) return
     setNextLeft(0)
-    navigate(`/watch/${src}/${encodeURIComponent(id)}/${encodeURIComponent(e.ID)}`)
+    navigate(`/watch/${encodeURIComponent(src)}/${encodeURIComponent(id)}/${encodeURIComponent(episode.id)}`)
+  }
+
+  const goNext = () => {
+    if (nextEp) go(nextEp)
+    else {
+      const n = queueNext()
+      if (n) navigate(`/watch/${encodeURIComponent(n.source)}/${encodeURIComponent(n.id)}/${encodeURIComponent(n.ep || n.id)}`)
+    }
   }
 
   const changeRate = (r) => {
@@ -171,18 +165,18 @@ export default function PlayerPage({ src, id, ep }) {
     if (videoRef.current) videoRef.current.playbackRate = r
   }
 
+  const waiting = !fatal && !playing && (!session || session.state === 'queued' || session.state === 'making')
+
   return (
     <div className="player-page">
       <div className="player-top">
-        <button className="chip" onClick={() => navigate(`/detail/${src}/${encodeURIComponent(id)}`)}>
-          ← {detail?.video?.Title || t('back')}
+        <button className="back" onClick={() => navigate(`/detail/${encodeURIComponent(src)}/${encodeURIComponent(id)}`)}>
+          ← {detail?.video?.title || t('Back')}
         </button>
-        <span className="player-ep">
-          {eps[i]?.title || t('ep', i + 1)}
-        </span>
-        <div className="player-rate">
+        <span className="player-ep">{eps[index]?.title || (index >= 0 ? t('Ep %d', index + 1) : '')}</span>
+        <div className="player-rate" aria-label={t('Speed')}>
           {rates.map((r) => (
-            <button key={r} className={'chip' + (r === rate ? ' chip-on' : '')} onClick={() => changeRate(r)}>
+            <button key={r} className={r === rate ? 'on' : ''} onClick={() => changeRate(r)}>
               {r}×
             </button>
           ))}
@@ -190,27 +184,35 @@ export default function PlayerPage({ src, id, ep }) {
       </div>
 
       <div className="stage">
-        <video ref={videoRef} controls autoPlay playsInline />
-        {!session && <div className="stage-overlay">{t('starting')}</div>}
-        {session && (session.state === 'queued' || session.state === 'making') && !fatal && (
-          <div className="stage-overlay">{t('transcoding')}</div>
+        <video
+          ref={videoRef}
+          controls
+          autoPlay
+          playsInline
+          onPlay={() => setPlaying(true)}
+          onPlaying={() => setPlaying(true)}
+        />
+        {waiting && (
+          <div className="stage-overlay">
+            {session?.state === 'making' || session?.state === 'ready' ? t('Transcoding — the picture is on its way…') : t('Getting the stream…')}
+          </div>
         )}
         {fatal && (
           <div className="stage-overlay">
             <div>{fatal}</div>
             <button className="btn" onClick={() => window.location.reload()}>
-              {t('retry')}
+              {t('Retry')}
             </button>
           </div>
         )}
         {nextLeft > 0 && (
           <div className="upnext">
-            <span>{t('upNext', nextLeft)}</span>
-            <button className="btn btn-accent" onClick={() => go(next)}>
-              {t('playNow')}
+            <span>{t('Up next in %d s', nextLeft)}</span>
+            <button className="btn accent" onClick={goNext}>
+              {t('Play now')}
             </button>
             <button className="btn" onClick={() => setNextLeft(0)}>
-              {t('cancel')}
+              {t('Cancel')}
             </button>
           </div>
         )}
@@ -218,12 +220,26 @@ export default function PlayerPage({ src, id, ep }) {
 
       <div className="player-controls">
         <button className="btn" disabled={!prev} onClick={() => go(prev)}>
-          ⏮ {t('prev')}
+          {t('Previous')}
         </button>
-        <button className="btn" disabled={!next} onClick={() => go(next)}>
-          {t('next')} ⏭
+        <button className="btn" disabled={!nextEp && !queueNext()} onClick={goNext}>
+          {t('Next')}
         </button>
       </div>
     </div>
   )
+}
+
+function queueNext() {
+  try {
+    const q = JSON.parse(sessionStorage.getItem('cvp-queue') || '[]')
+    const path = window.location.pathname
+    const m = path.match(/^\/watch\/([^/]+)\/([^/]+)\//)
+    if (!m || !Array.isArray(q)) return null
+    const id = decodeURIComponent(m[2])
+    const i = q.findIndex((it) => it.id === id)
+    return i >= 0 ? q[i + 1] || null : null
+  } catch {
+    return null
+  }
 }

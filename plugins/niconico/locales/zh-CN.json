@@ -1,0 +1,12 @@
+{
+  "NicoNico": "NicoNico",
+  "Ranking": "排行",
+  "Music": "音乐",
+  "Anime": "动画",
+  "Games": "游戏",
+  "no such page": "没有这个分类",
+  "yt-dlp is not installed on this machine": "这台机器上没有 yt-dlp",
+  "Allow NicoNico to start programs in the settings' plugins page": "请在设置的插件页里允许 NicoNico 启动程序",
+  "no playable stream for this video": "这个视频没有可播的流",
+  "this video needs a sign-in NicoNico doesn't offer here": "这个视频要登录，这里还不能登 NicoNico"
+}

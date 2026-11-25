@@ -2,14 +2,14 @@ package app
 
 import (
 	"bytes"
-	"context"
-	"io"
+	"errors"
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
-	"errors"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -17,16 +17,18 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"codie-video-player/internal/plugin"
 	"codie-video-player/internal/proxy"
-	"codie-video-player/internal/source/huangguo"
 )
 
 // coverReferers is the page a picture host wants to be asked from — some
-// don't give their pictures to whoever asks, only to their own site.
+// don't give their pictures to whoever asks, only to their own site. A
+// plugin's own requestHeaders win when they name the same host.
 var coverReferers = map[string]string{
 	"hdslb.com": "https://www.bilibili.com/",
 	"ytimg.com": "https://www.youtube.com/",
 	"ggpht.com": "https://www.youtube.com/",
+	"nimg.jp":   "https://www.nicovideo.jp/",
 }
 
 // coverClient fetches the pictures that don't need the built-in source's
@@ -56,30 +58,38 @@ func proxyEnv() []string {
 	return append(os.Environ(), env...)
 }
 
-// fetchCover brings a cover's bytes home: the built-in source's own through
-// its client, which decrypts what the site keeps scrambled, and the rest
-// straight, with whatever Referer their host insists on.
-func fetchCover(url string) ([]byte, error) {
+// fetchCover brings a cover's bytes home, with whatever Referer the host
+// insists on and whatever headers a plugin asked for that host.
+func fetchCover(rawurl string) ([]byte, error) {
+	u, err := url.Parse(rawurl)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, errors.New("bad cover url")
+	}
+	req, err := http.NewRequest(http.MethodGet, rawurl, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh) CodieVideoPlayer/0.1")
 	for host, referer := range coverReferers {
-		if strings.Contains(url, host) {
-			req, err := http.NewRequest(http.MethodGet, url, nil)
-			if err != nil {
-				return nil, err
-			}
+		if strings.Contains(rawurl, host) {
 			req.Header.Set("Referer", referer)
-			req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh) CodieVideoPlayer/0.1")
-			res, err := coverClient.Do(req)
-			if err != nil {
-				return nil, err
-			}
-			defer res.Body.Close()
-			if res.StatusCode != http.StatusOK {
-				return nil, errors.New("cover answered " + res.Status)
-			}
-			return io.ReadAll(io.LimitReader(res.Body, 32<<20))
+			break
 		}
 	}
-	return huangguo.Cover(context.Background(), url)
+	for _, p := range plugin.Loaded() {
+		for k, v := range p.HeadersFor(u, plugin.KindImage) {
+			req.Header.Set(k, v)
+		}
+	}
+	res, err := coverClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, errors.New("cover answered " + res.Status)
+	}
+	return io.ReadAll(io.LimitReader(res.Body, 32<<20))
 }
 
 // covers keeps the pictures of the cards, decoded and ready to draw. What the

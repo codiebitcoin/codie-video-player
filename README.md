@@ -11,7 +11,8 @@ A desktop player for short dramas and videos, made for the CODE27 family. Pick a
 | Local | Built in (`internal/source/local`) | Folders you add on this computer. Each folder is a group; every video file in it plays directly, with no network. |
 | YouTube | Plugin (`plugins/youtube-music`) | Popular, Music, Gaming, News and Movies, plus search. Live streams are left out. |
 | Bilibili | Plugin (`plugins/bilibili`) | Popular, ranking and latest, plus your favorites and collections once you sign in. |
-| 黄果短剧 | Built in (`internal/source/huangguo`) | Short dramas: popular, latest, this year and the site's own categories. Shipped with the app and off until you turn it on in Settings. |
+| NicoNico | Plugin (`plugins/niconico`) | Ranking, Music, Anime and Games, plus search. A play goes through yt-dlp. Videos that need a NicoNico sign-in aren't played. |
+| 黄果短剧 | Plugin (`plugins/huangguo`) | Short dramas: popular, latest, this year and the site's own categories. Shipped with the app and off until you turn it on in Settings. |
 
 Continue Watching and Following are kept per source, so what you watched on one never shows on another.
 
@@ -32,7 +33,18 @@ go tool mygo build          # the desktop app, from mygo.config.ts
 make web-run                # the browser face, on 127.0.0.1:8080
 ```
 
-`go tool mygo build -platform darwin/arm64,windows/amd64,linux/amd64` builds every platform from one machine. The web face is the same sources over HTTP, in `cmd/web`, and the image is `deploy/docker-compose.yml`.
+`go tool mygo build -platform darwin/arm64,windows/amd64,linux/amd64` builds every platform from one machine. The web face is the same sources over HTTP, in `cmd/web`.
+
+## Server
+
+The browser face is also a server image, separate from the desktop installers. It is published as its own package, [ghcr.io/codiebitcoin/codie-video-player-web](https://github.com/users/codiebitcoin/packages/container/package/codie-video-player-web), and a desktop release builds it too — pushing a `v*` tag publishes the image, without opening another Release. A new package starts private; set it to public once in the package settings (GitHub has no API for that, and it cannot be undone). Until then, `docker login ghcr.io` as `codiebitcoin` is required to pull it.
+
+```bash
+cp deploy/env.example deploy/.env   # set AUTH_USER and AUTH_PASS
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+`AUTH_USER` and `AUTH_PASS` are the login. Leave `AUTH_PASS` empty and the server makes a password and prints it once in the log. The page speaks English, 简体中文 and 日本語; the choice is kept with the data. Local folders are paths on the machine the container sees, added in Settings, and Continue Watching and Following stay with the source they came from.
 
 ## Notes
 

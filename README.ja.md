@@ -11,7 +11,8 @@ English: [README.md](README.md) · 简体中文: [README.zh-CN.md](README.zh-CN.
 | この Mac | 組み込み（`internal/source/local`） | このコンピュータのフォルダを追加します。フォルダごとに一つのグループになり、中の動画ファイルをネットワークを使わずに再生します。 |
 | YouTube | プラグイン（`plugins/youtube-music`） | 人気、音楽、ゲーム、ニュース、映画、そして検索。ライブ配信は表示しません。 |
 | Bilibili | プラグイン（`plugins/bilibili`） | 人気、ランキング、最新。ログインするとお気に入りとコレクションも使えます。 |
-| 黄果ドラマ | 組み込み（`internal/source/huangguo`） | 短編ドラマ。人気、最新、今年、サイト自身の分類。アプリに同梱され、設定でオンにするまでは無効です。 |
+| NicoNico | プラグイン（`plugins/niconico`） | ランキング、音楽、アニメ、ゲーム、そして検索。再生は yt-dlp を使います。ログインが必要な動画は再生しません。 |
+| 黄果ドラマ | プラグイン（`plugins/huangguo`） | 短編ドラマ。人気、最新、今年、サイト自身の分類。アプリに同梱され、設定でオンにするまでは無効です。 |
 
 「続きを見る」と「フォロー中」はソースごとに保持されます。あるソースで見た作品は、別のソースには表れません。
 
@@ -32,7 +33,18 @@ go tool mygo build          # デスクトップアプリ。mygo.config.ts に�
 make web-run                # ブラウザ版。127.0.0.1:8080
 ```
 
-`go tool mygo build -platform darwin/arm64,windows/amd64,linux/amd64` で、一台のマシンから各プラットフォームをビルドできます。ブラウザ版は同じソースの HTTP 版で、`cmd/web` にあります。イメージは `deploy/docker-compose.yml` です。
+`go tool mygo build -platform darwin/arm64,windows/amd64,linux/amd64` で、一台のマシンから各プラットフォームをビルドできます。ブラウザ版は同じソースの HTTP 版で、`cmd/web` にあります。
+
+## サーバー
+
+ブラウザ版はデスクトップのインストーラーとは別のサーバイメージです。パッケージは [ghcr.io/codiebitcoin/codie-video-player-web](https://github.com/users/codiebitcoin/packages/container/package/codie-video-player-web) で、デスクトップのリリースと一緒に作られます。`v*` タグを push するとイメージが公開され、別の Release は作られません。新しいパッケージは非公開で始まります。パッケージ設定で一度だけ公開にしてください（GitHub にこの操作の API はなく、公開にした後は戻せません）。公開にするまでは、`codiebitcoin` で `docker login ghcr.io` してから pull します。
+
+```bash
+cp deploy/env.example deploy/.env   # AUTH_USER と AUTH_PASS を設定
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+`AUTH_USER` と `AUTH_PASS` がログインです。`AUTH_PASS` を空にすると、サーバーがパスワードを作り、ログに一度だけ出します。表示言語は英語、简体中国語、日本語で、選んだ言語はデータと一緒に保存されます。ローカルのフォルダはコンテナから見えるパスで、設定から追加します。「続きを見る」と「フォロー中」はソースごとに分かれます。
 
 ## 注意
 

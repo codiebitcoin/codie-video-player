@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 
-	"codie-video-player/internal/i18n"
 	"codie-video-player/internal/web"
 )
 
@@ -43,8 +42,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "print the version and go")
 	flag.Parse()
 
-	i18n.SetLanguage("zh-CN")
-	version := os.Getenv("VERSION")
+		version := os.Getenv("VERSION")
 	if version == "" {
 		if b, err := os.ReadFile("VERSION"); err == nil {
 			version = string(b)

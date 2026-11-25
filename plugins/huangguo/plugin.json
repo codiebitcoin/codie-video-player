@@ -1,0 +1,22 @@
+{
+  "id": "huangguo",
+  "name": "Huangguo Dramas",
+  "version": "0.2.0",
+  "minAppVersion": "0.1.22",
+  "kind": "video",
+  "main": "index.js",
+  "playback": "stream",
+  "permissions": {
+    "network": ["huangguoai.com", "*.huangguoai.com", "pic.qnlycc.cn", "*.qnlycc.cn"]
+  },
+  "requestHeaders": [
+    {
+      "hosts": ["pic.qnlycc.cn", "*.qnlycc.cn"],
+      "kinds": ["image"],
+      "headers": {
+        "Referer": "https://huangguoai.com/",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36"
+      }
+    }
+  ]
+}

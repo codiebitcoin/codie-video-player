@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"codie-video-player/internal/source/huangguo"
 	"codie-video-player/internal/video"
 )
 
@@ -118,6 +117,64 @@ func login(t *testing.T, ts *httptest.Server) *http.Client {
 	jar.SetCookies(u, res.Cookies())
 	client.Jar = jar
 	return client
+}
+
+func TestSourceOrderAndHuangguoOff(t *testing.T) {
+	// 源的顺序跟桌面一样：本机、YouTube、Bilibili、NicoNico，黄果最后。
+	// 第一次运行黄果是关着的，记在插件开关里。
+	dir := t.TempDir()
+	s, err := New(Options{
+		DataDir:    dir,
+		PluginsDir: filepath.Join(dir, "plugins"),
+		Version:    "test",
+		AuthUser:   "codie",
+		AuthPass:   "pw123",
+		Static:     testFS(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if !s.pluginDisabled("huangguo") {
+		t.Fatal("huangguo starts on, want it off")
+	}
+	s.sources = append(s.sources,
+		source{id: "bilibili", name: "Bilibili"},
+		source{id: "niconico", name: "NicoNico"},
+		source{id: "youtube", name: "YouTube"},
+		source{id: "huangguo", name: "黄果短剧"},
+		source{id: "other", name: "Other"},
+	)
+	s.orderSources()
+	var ids []string
+	for _, so := range s.sources {
+		ids = append(ids, so.id)
+	}
+	want := []string{"local", "youtube", "bilibili", "niconico", "other", "huangguo"}
+	if strings.Join(ids, ",") != strings.Join(want, ",") {
+		t.Errorf("sources = %v, want %v", ids, want)
+	}
+}
+
+func TestHistoryIsPerSource(t *testing.T) {
+	// 继续观看按源分开：问一个源，另一个源看过的不出来。
+	s, ts, _ := testServer(t)
+	client := login(t, ts)
+	s.lib.Watch(video.Item{ID: "a", Source: "youtube", Title: "A"}, video.Episode{ID: "e"}, 0, 1, 10, false)
+	s.lib.Watch(video.Item{ID: "b", Source: "bilibili", Title: "B"}, video.Episode{ID: "e"}, 0, 1, 10, false)
+
+	res, err := client.Get(ts.URL + "/api/history?src=youtube")
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	defer res.Body.Close()
+	var out struct {
+		History []struct {
+			ID string `json:"id"`
+		} `json:"history"`
+	}
+	if json.NewDecoder(res.Body).Decode(&out) != nil || len(out.History) != 1 || out.History[0].ID != "a" {
+		t.Errorf("youtube history = %+v, want only a", out.History)
+	}
 }
 
 func TestLoginGate(t *testing.T) {
@@ -391,18 +448,3 @@ func TestSearchDeadline(t *testing.T) {
 	}
 }
 
-func TestSearchWithRealHuangguoDeadline(t *testing.T) {
-	// 真内置源(这台机器连不上它,拨号超时)卡在场,搜索也要按期回来。
-	s, ts, _ := testServer(t)
-	s.sources = append(s.sources, source{id: "huangguo", name: "黄果短剧", src: &huangguo.Source{}})
-	client := login(t, ts)
-	begin := time.Now()
-	res, err := client.Get(ts.URL + "/api/search?q=test")
-	if err != nil {
-		t.Fatalf("search: %v", err)
-	}
-	defer res.Body.Close()
-	if took := time.Since(begin); took > 15*time.Second {
-		t.Errorf("search took %s", took)
-	}
-}
