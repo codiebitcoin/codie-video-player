@@ -54,15 +54,17 @@ unpack() { # url name dest
 
 ytbase=https://github.com/yt-dlp/yt-dlp/releases/latest/download
 ffbase=https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest
-macffmpeg=https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip
-macffprobe=https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffprobe.zip
+macbase=https://ffmpeg.martin-riedl.de/download/macos
 
 one() {
 	case "$1" in
 	darwin)
+		# yt-dlp 是 universal 的,两个架构共用;ffmpeg 要按架构各放一份。
 		fetch "$ytbase/yt-dlp_macos" resources/darwin/bin/yt-dlp
-		unpack "$macffmpeg" ffmpeg resources/darwin/bin/ffmpeg
-		unpack "$macffprobe" ffprobe resources/darwin/bin/ffprobe ;;
+		unpack "$macbase/arm64/1789931890_9.0.2/ffmpeg.zip" ffmpeg resources/darwin-arm64/bin/ffmpeg
+		unpack "$macbase/arm64/1789931890_9.0.2/ffprobe.zip" ffprobe resources/darwin-arm64/bin/ffprobe
+		unpack "$macbase/amd64/1789931890_9.0.2/ffmpeg.zip" ffmpeg resources/darwin-amd64/bin/ffmpeg
+		unpack "$macbase/amd64/1789931890_9.0.2/ffprobe.zip" ffprobe resources/darwin-amd64/bin/ffprobe ;;
 	windows-amd64)
 		fetch "$ytbase/yt-dlp.exe" resources/windows-amd64/bin/yt-dlp.exe
 		unpack "$ffbase/ffmpeg-master-latest-win64-gpl.zip" ffmpeg.exe resources/windows-amd64/bin/ffmpeg.exe

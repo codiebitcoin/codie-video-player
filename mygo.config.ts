@@ -15,5 +15,7 @@ export default ({ command }: { command: string }) => ({
     comment: "A video player for short dramas",
     categories: ["AudioVideo", "Video", "Player"],
     webview: false,
+    // 只出 deb:发行版装它一个就够,别的不再传。
+    formats: ["deb"],
   },
 });
