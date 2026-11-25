@@ -250,6 +250,10 @@ func Run(bundledPlugins embed.FS) error {
 		}
 		a.makeSources(bundledPlugins)
 		a.loadCodie()
+		if a.codie != nil {
+			// 连着设备就默认投它:点开一集直接落在大屏上,不用每回先切。
+			a.deviceOutput = true
+		}
 		log.Printf("app ready: version=%s lang=%s codie=%v", mygo.App.Version(), a.settings.Language, a.codie != nil)
 		a.checkForUpdates()
 		makeTray()

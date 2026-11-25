@@ -101,9 +101,17 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 	a.codieStream(s, rate, resumeS, totalS, gen)
 }
 
-// codieSegmentSpanS is how much of an episode one segment holds at first: short
-// enough that the first picture comes soon, long enough to keep the passes few.
-const codieSegmentSpanS = 60
+// codieSegmentSpanS is how much of an episode the first segment holds: short,
+// so the picture comes soon, and the size it made decides the rest's spans.
+const codieSegmentSpanS = 30
+
+// codieFirstSegmentBytes and codieSegmentBytes are what a segment aims at:
+// about 10 MiB for the first, so it's quickly here, and 30 MiB after, so the
+// passes are few without crowding the device's one-session cap.
+const (
+	codieFirstSegmentBytes = 10 << 20
+	codieSegmentBytes      = 30 << 20
+)
 
 // codieStream makes the episode in segments, each cut to stay under the
 // device's one-session cap, and plays the first as soon as it's made: the rest
@@ -149,7 +157,21 @@ func (a *app) codieStream(s *video.Stream, rate, resumeS, totalS float64, gen ui
 			span = want / 2
 			continue
 		}
-		log.Printf("codie play: segment %d made (%.0fs+%.0fs, %d bytes)", made, from, want, fileSize(seg.path))
+		size := fileSize(seg.path)
+		log.Printf("codie play: segment %d made (%.0fs+%.0fs, %d bytes)", made, from, want, size)
+		// 这一段每秒出了多少字节,下一段就按它定长:第一段够小,后面按 30MiB。
+		if size > 0 && want > 0 {
+			perSec := float64(size) / want
+			target := float64(codieSegmentBytes)
+			next := target / perSec
+			if next < 15 {
+				next = 15
+			}
+			if next > 300 {
+				next = 300
+			}
+			span = next
+		}
 		from += want
 		if made == 0 {
 			if !a.codieStartFirst(seg, gen, rate, from) {
