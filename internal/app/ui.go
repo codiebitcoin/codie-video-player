@@ -49,8 +49,21 @@ func (a *app) view(c *ui.Context) {
 	})
 	root.OnShortcut(0, ui.KeyLeft, func() { a.shortcutSeek(-5 * time.Second) })
 	root.OnShortcut(0, ui.KeyRight, func() { a.shortcutSeek(5 * time.Second) })
-	root.OnShortcut(0, ui.KeyUp, func() { a.shortcutVolume(5) })
-	root.OnShortcut(0, ui.KeyDown, func() { a.shortcutVolume(-5) })
+	root.OnShortcut(0, ui.KeyUp, func() {
+		if a.feedMode {
+			a.feedSkip(false)
+			a.feedGoto(a.feedAt - 1)
+			return
+		}
+		a.shortcutVolume(5)
+	})
+	root.OnShortcut(0, ui.KeyDown, func() {
+		if a.feedMode {
+			a.nextEpisode(false)
+			return
+		}
+		a.shortcutVolume(-5)
+	})
 	root.OnShortcut(0, ui.KeyF, func() {
 		if a.page == pagePlay {
 			a.toggleFullscreen()
@@ -575,6 +588,8 @@ func (a *app) listView(c *ui.Context) {
 		ui.Scroll(c.Key("grid")).Fill().Padding(10, 20, 32, 20).Children(func() {
 			if a.searching {
 				a.searchView(c)
+			} else if a.isFeedTab() {
+				a.feedListView(c)
 			} else if isPlaylistTab(a.tabID) {
 				a.playlistHeader(c)
 				a.grid(c)
@@ -588,6 +603,90 @@ func (a *app) listView(c *ui.Context) {
 	if !a.settings.WizardDone {
 		a.wizard(c)
 	}
+}
+
+// feedListView is a feed as a feed: one item large, what comes next under it,
+// and the ways on — play, next, skip, or say it's not wanted.
+func (a *app) feedListView(c *ui.Context) {
+	if len(a.items) == 0 {
+		if a.gridLoading || a.tabsLoading {
+			a.skeleton(c)
+			return
+		}
+		a.centered(c, i18n.T("Nothing here yet"), "", nil)
+		return
+	}
+	if a.feedAt >= len(a.items) {
+		a.feedAt = len(a.items) - 1
+	}
+	if a.feedAt < 0 {
+		a.feedAt = 0
+	}
+	it := a.items[a.feedAt]
+	ui.Column(c).Gap(14).MaxWidth(760).Children(func() {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, iconFire).Size(15, 15).TextColor(colors.accent)
+			ui.Text(c, i18n.T("For You")).FontSize(18).FontWeight(800)
+			ui.Text(c, i18n.Tf("%d of %d", a.feedAt+1, len(a.items))).FontSize(12).TextColor(colors.faint)
+		})
+		ui.Box(c).AspectRatio(16.0 / 9.0).Radius(14).Clip().Children(func() {
+			a.coverFill(c, it.Cover)
+		})
+		ui.Text(c, it.Title).FontSize(17).FontWeight(700).MaxLines(2)
+		if it.Subtitle != "" {
+			ui.Text(c, it.Subtitle).FontSize(12.5).TextColor(colors.muted).SingleLine()
+		}
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			play := ui.ButtonBase(c.Key("feed-play")).Height(34).PaddingX(18).Radius(999).Center().
+				FocusRing(false).Label(i18n.T("Play")).Background(colors.accent).TextColor(colors.onAccent)
+			play.Children(func() {
+				ui.Text(c, i18n.T("Play")).FontSize(13.5).FontWeight(700)
+			})
+			if play.Clicked() {
+				a.feedPlayAt(a.feedAt)
+			}
+			if ui.Button(c.Key("feed-next"), i18n.T("Next")).Clicked() {
+				a.feedSkip(false)
+			}
+			if ui.Button(c.Key("feed-gone"), i18n.T("Not Interested")).Clicked() {
+				a.feedSkip(true)
+			}
+		})
+		if len(a.items) > a.feedAt+1 {
+			ui.Text(c, i18n.T("Up next")).FontSize(12).TextColor(colors.faint).Margin(8, 0, 0, 0)
+			n := min(3, len(a.items)-a.feedAt-1)
+			for i := 1; i <= n; i++ {
+				next := a.items[a.feedAt+i]
+				row := ui.ButtonBase(c.Key("feed-up" + strconv.Itoa(i))).Height(44).Radius(8).PaddingX(8).
+					AlignItems(ui.Center).Justify(ui.Start).FocusRing(false).Label(next.Title)
+				row.Background(colors.hover)
+				row.Children(func() {
+					ui.Box(c).Size(52, 30).Radius(5).Clip().Children(func() {
+						a.coverFill(c, next.Cover)
+					})
+					ui.Column(c).Gap(0).Children(func() {
+						ui.Text(c, next.Title).FontSize(12.5).FontWeight(600).SingleLine()
+						if next.Subtitle != "" {
+							ui.Text(c, next.Subtitle).FontSize(11).TextColor(colors.faint).SingleLine()
+						}
+					})
+				})
+				if row.Clicked() {
+					a.feedGoto(a.feedAt + i)
+				}
+			}
+		}
+	})
+}
+
+// feedPlayAt starts the feed at item i: the rest of the page follows it.
+func (a *app) feedPlayAt(i int) {
+	if len(a.items) == 0 {
+		return
+	}
+	a.feedAt = i
+	a.playPlaylist(a.items, i, false)
+	a.feedMode = true
 }
 
 // playlistHeader sits over a playlist tab (favorites folder, saved collection,
@@ -1528,6 +1627,68 @@ func (a *app) stageContent(c *ui.Context, playing playing) {
 	}
 }
 
+// feedControls is the feed's own set of buttons down the stage's right: back
+// one, on to the next, or out of the feed, with a note that this is a feed at
+// all, which the title bar alone doesn't say.
+func (a *app) feedControls(c *ui.Context, playing playing) {
+	if !a.feedMode || a.pipActive() {
+		return
+	}
+	op := float32(1)
+	if !a.controlsOn {
+		op = 0
+	}
+	side := ui.Column(c.Key("feed-side")).Absolute().Right(14).Top(0).Bottom(0).
+		Justify(ui.Center).Gap(10).Opacity(op).IgnoreInput(!a.controlsOn)
+	side.Children(func() {
+		badge := ui.Row(c).Gap(6).AlignItems(ui.Center).Padding(6, 10).Radius(999).
+			Background(ui.RGBA(0, 0, 0, 0.55)).Border(1, ui.RGBA(255, 255, 255, 0.16))
+		badge.Children(func() {
+			ui.Icon(c, iconFire).Size(12, 12).TextColor(ui.RGB(255, 255, 255))
+			ui.Text(c, i18n.T("For You")).FontSize(12).FontWeight(700).TextColor(ui.RGB(255, 255, 255))
+		})
+		if b := feedSideButton(c, iconBack, i18n.T("Previous Episode")); b.Clicked() {
+			a.wakeControls()
+			a.feedSkip(false)
+			a.feedGoto(a.feedAt - 1)
+		}
+		if b := feedSideButton(c, iconNext, i18n.T("Next Episode")); b.Clicked() {
+			a.wakeControls()
+			a.nextEpisode(false)
+		}
+		if b := feedSideButton(c, iconX, i18n.T("Back")); b.Clicked() {
+			a.leaveFeed()
+		}
+	})
+}
+
+// feedSideButton is one of the feed's round buttons over the picture.
+func feedSideButton(c *ui.Context, icon *ui.SVG, label string) ui.Element {
+	b := ui.ButtonBase(c.Key("feed-"+label)).Size(38, 38).Center().Radius(999).Label(label).
+		Background(ui.RGBA(0, 0, 0, 0.5)).Border(1, ui.RGBA(255, 255, 255, 0.16))
+	b.Children(func() {
+		ui.Icon(c, icon).Size(16, 16).TextColor(ui.RGB(255, 255, 255))
+	})
+	return b
+}
+
+// leaveFeed steps out of the feed: what plays stops, and the feed it came
+// from shows again where it was.
+func (a *app) leaveFeed() {
+	a.feedMode = false
+	a.stopPlayer()
+	a.page = pageList
+	a.detail = nil
+	a.detailOf = ""
+	a.playing = playing{}
+	a.nextLatch = false
+	a.nextLeft = 0
+	a.drawerOpen, a.speedOpen = false, false
+	if a.win != nil {
+		a.win.Invalidate()
+	}
+}
+
 // openingState reports whether the stage is still waiting for its episode,
 // and whether anything at all is on it. A stage with nothing playing shows
 // nothing: a spinner there reads as a player stuck, not as an empty stage.
@@ -1547,6 +1708,7 @@ func (a *app) openingState() (bool, bool) {
 // playOverlays is what floats over the stage: the countdown to the next
 // episode, the drawer of episodes, and the controls.
 func (a *app) playOverlays(c *ui.Context, playing playing) {
+	a.feedControls(c, playing)
 	// The episode ended: the next one is counted in.
 	if p := a.player; p != nil && p.Ready() && p.Err() == nil && p.Ended() {
 		if !a.nextLatch {

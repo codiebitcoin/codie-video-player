@@ -163,9 +163,11 @@ type app struct {
 	// feedAutostart says a feed tab was just opened: its first page starts
 	// playing as soon as it's here.
 	feedAutostart bool
-	codieGen      uint64
-	codieState    *codieout.MediaSessionState
-	codieBusy     string
+	// feedAt is the item of the feed being looked at, the one Play opens.
+	feedAt     int
+	codieGen   uint64
+	codieState *codieout.MediaSessionState
+	codieBusy  string
 	// codieCancel ends the making of the episode's segments when the playback
 	// they were for is over: a stopped or replaced episode leaves no ffmpeg
 	// running behind it.
@@ -655,6 +657,7 @@ func (a *app) useTab(id string) {
 	}
 	a.tabID = id
 	a.feedAutostart = id == "feed"
+	a.feedAt = 0
 	a.searching = false
 	a.playlistQuery = ""
 	a.clearGrid()
@@ -1213,6 +1216,49 @@ func (a *app) nextEpisode(back bool) {
 	// 信息流的队列没有尽头:这一页走完了,下一页接着来。
 	if dir > 0 && a.isFeedTab() {
 		a.feedContinue()
+	}
+}
+
+// feedGoto looks at item i of the feed, playing it when the feed is on screen.
+func (a *app) feedGoto(i int) {
+	if len(a.items) == 0 {
+		return
+	}
+	if i < 0 {
+		i = 0
+	}
+	if i >= len(a.items) {
+		// Past the end: ask for the next page, which plays on when it's here.
+		a.feedContinue()
+		return
+	}
+	a.feedAt = i
+	if len(a.queue) > 0 || (a.page == pagePlay && a.feedMode) {
+		a.feedMode = true
+		a.playQueueAt(i)
+		return
+	}
+	if a.win != nil {
+		a.win.Invalidate()
+	}
+}
+
+// feedSkip drops the item looked at from the feed, or just moves past it, and
+// looks at the one that follows.
+func (a *app) feedSkip(gone bool) {
+	if len(a.items) == 0 {
+		return
+	}
+	at := a.feedAt
+	if gone {
+		a.items = append(a.items[:at], a.items[at+1:]...)
+		if len(a.queue) > at {
+			a.queue = append(a.queue[:at], a.queue[at+1:]...)
+		}
+	}
+	a.feedGoto(at)
+	if a.win != nil {
+		a.win.Invalidate()
 	}
 }
 
