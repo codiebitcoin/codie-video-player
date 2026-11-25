@@ -229,14 +229,39 @@ func (a *app) codieMakeSegment(s *video.Stream, rate, fromS, spanS float64) (cod
 	ctx, cancel := context.WithTimeout(context.Background(), codieFFmpegTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffmpeg, args...)
+	hideWindow(cmd)
 	cmd.Env = proxyEnv()
-	out, err := cmd.CombinedOutput()
+	// 转的过程中说到做到多少 MB,免得界面只剩一个转圈的圈。
+	stop := make(chan struct{})
+	go func() {
+		tick := time.NewTicker(700 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				n := fileSize(dst)
+				a.post(func() {
+					if a.codieBusy != "" {
+						a.codieBusy = i18n.Tf("Transcoding for the device… %s", megabytes(n))
+					}
+				})
+			}
+		}
+	}()
+	var said sayBuffer
+	cmd.Stdout = &said
+	cmd.Stderr = &said
+	err = cmd.Run()
+	close(stop)
 	if err != nil {
 		os.Remove(dst)
 		if ctx.Err() != nil {
 			return codieSegment{}, errors.New(i18n.T("This episode timed out transcoding; try again"))
 		}
-		return codieSegment{}, fmt.Errorf("%s", tailLine(out))
+		log.Printf("codie ffmpeg: %s", tailLine([]byte(said.String())))
+		return codieSegment{}, fmt.Errorf("%s", tailLine([]byte(said.String())))
 	}
 	return codieSegment{path: dst, durMS: probeFileDurationMS(dst)}, nil
 }
@@ -297,6 +322,7 @@ func (a *app) codieProbeSeconds(s *video.Stream, ep video.Episode) float64 {
 	}
 	args = append(args, "-show_entries", "format=duration", "-of", "json", s.URL)
 	cmd := exec.Command(ffprobe, args...)
+	hideWindow(cmd)
 	cmd.Env = proxyEnv()
 	out, err := cmd.Output()
 	if err != nil {
@@ -522,6 +548,7 @@ func codieFFmpegSegment(ffmpeg, srcPath string, segSec, parts int, totalMS int64
 		"-segment_format_options", "movflags=+faststart",
 		pattern,
 	)
+	hideWindow(cmd)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("ffmpeg segment: %v (%s)", err, tailLine(out))
 	}
@@ -556,6 +583,7 @@ func codieFFmpegSegment(ffmpeg, srcPath string, segSec, parts int, totalMS int64
 			"-movflags", "+faststart",
 			outPath,
 		)
+		hideWindow(scmd)
 		if out, err := scmd.CombinedOutput(); err != nil {
 			for _, p := range sliced {
 				os.Remove(p)
@@ -636,6 +664,7 @@ func (a *app) codieMakeMP4To(s *video.Stream, rate float64, dst string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), codieFFmpegTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffmpeg, args...)
+	hideWindow(cmd)
 	cmd.Env = proxyEnv()
 	out, err := cmd.StdoutPipe()
 	if err != nil {
@@ -844,6 +873,7 @@ func probePlayableAsIs(s *video.Stream, headers map[string]string) bool {
 	// 画面:要 H.264,不大于 1080p。
 	vargs := append(videoArgs, "-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height", "-of", "json")
 	vprobe := exec.Command(ffprobe, append(vargs, s.URL)...)
+	hideWindow(vprobe)
 	vprobe.Env = proxyEnv()
 	out, err := vprobe.Output()
 	if err != nil {
@@ -869,6 +899,7 @@ func probePlayableAsIs(s *video.Stream, headers map[string]string) bool {
 	if s.AudioURL != "" {
 		aargs := append(videoArgs, "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "json")
 		aprobe := exec.Command(ffprobe, append(aargs, s.AudioURL)...)
+		hideWindow(aprobe)
 		aprobe.Env = proxyEnv()
 		aout, err := aprobe.Output()
 		if err != nil {

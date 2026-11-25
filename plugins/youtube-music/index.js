@@ -219,20 +219,27 @@ function isHLS(f) {
   return /m3u8/i.test(String(f.protocol || ""));
 }
 
+// worth is the order streams are taken in: the tallest that is served as one
+// file, before any playlist. YouTube lists its HLS variants among the others,
+// and they're the slowest to read and the least sure to play.
+function worth(f) {
+  const height = Math.max(+(f.height || 0), +(f.width || 0));
+  return (isHLS(f) ? 0 : 1) * 10000 + height;
+}
+
 // pick finds the worthiest stream of a video's formats: a stream with both
 // picture and sound first, else the two worthiest apart.
 function pick(formats) {
   const withUrl = (formats || []).filter((f) => f && f.url);
-  const height = (f) => Math.max(+(f.height || 0), +(f.width || 0));
   const both = withUrl
     .filter((f) => f.vcodec && f.vcodec !== "none" && f.acodec && f.acodec !== "none")
-    .sort((a, b) => height(b) - height(a));
+    .sort((a, b) => worth(b) - worth(a));
   if (both.length) {
     return { url: both[0].url, audioUrl: "", ext: both[0].ext || "mp4", hls: isHLS(both[0]) };
   }
   const picture = withUrl
     .filter((f) => f.vcodec && f.vcodec !== "none")
-    .sort((a, b) => height(b) - height(a));
+    .sort((a, b) => worth(b) - worth(a));
   const sound = withUrl
     .filter((f) => f.acodec && f.acodec !== "none" && (!f.vcodec || f.vcodec === "none"))
     .sort((a, b) => +((b.abr || 0) + "") > +((a.abr || 0) + "") ? 1 : -1);

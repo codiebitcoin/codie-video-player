@@ -63,6 +63,7 @@ func streamThroughFFmpeg(s *video.Stream, startS float64) (*ui.VideoPlayer, stri
 	}
 	args := streamFFmpegArgs(s, startS)
 	cmd := exec.Command(ffmpeg, args...)
+	hideWindow(cmd)
 	cmd.Env = proxyEnv()
 	stderr := &sayBuffer{} // what ffmpeg said, for a pass that goes nowhere
 	cmd.Stderr = stderr
@@ -89,7 +90,7 @@ func streamThroughFFmpeg(s *video.Stream, startS float64) (*ui.VideoPlayer, stri
 		cmd.Process.Kill()
 		return nil, "", false, err
 	}
-	registerStream(p, &running{cmd: cmd, srv: srv, said: stderr})
+	registerStream(p, &running{cmd: cmd, srv: srv, buf: buf, said: stderr})
 	return p, "", true, nil
 }
 
@@ -97,6 +98,7 @@ func streamThroughFFmpeg(s *video.Stream, startS float64) (*ui.VideoPlayer, stri
 type running struct {
 	cmd  *exec.Cmd
 	srv  *http.Server
+	buf  *streamBuf
 	said *sayBuffer
 }
 
@@ -111,6 +113,21 @@ func registerStream(p *ui.VideoPlayer, r *running) {
 	runningMu.Lock()
 	runningBy[p] = r
 	runningMu.Unlock()
+}
+
+// streamedBytes is how much of a stream behind a player has been made, or 0
+// when nothing is feeding it.
+func streamedBytes(p *ui.VideoPlayer) int64 {
+	if p == nil {
+		return 0
+	}
+	runningMu.Lock()
+	r := runningBy[p]
+	runningMu.Unlock()
+	if r == nil || r.buf == nil {
+		return 0
+	}
+	return r.buf.Size()
 }
 
 // stopStream ends the pass behind a player, if one feeds it.
@@ -186,6 +203,13 @@ func (b *streamBuf) Write(p []byte) (int, error) {
 	b.mu.Unlock()
 	b.cond.Broadcast()
 	return len(p), nil
+}
+
+// Size is how many bytes the stream has made so far.
+func (b *streamBuf) Size() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return int64(len(b.data))
 }
 
 // finish says the pass is over, with whatever became of it.

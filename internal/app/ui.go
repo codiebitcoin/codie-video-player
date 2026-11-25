@@ -1529,9 +1529,13 @@ func (a *app) stageContent(c *ui.Context, playing playing) {
 }
 
 // openingState reports whether the stage is still waiting for its episode,
-// and whether anything at all is on it.
+// and whether anything at all is on it. A stage with nothing playing shows
+// nothing: a spinner there reads as a player stuck, not as an empty stage.
 func (a *app) openingState() (bool, bool) {
 	if a.pipActive() || (a.deviceOutput && a.codie != nil) || a.playerErr != "" {
+		return false, false
+	}
+	if a.playing.item.ID == "" {
 		return false, false
 	}
 	if p := a.player; p != nil {
@@ -2263,8 +2267,22 @@ func iconButton(c *ui.Context, icon *ui.SVG, size float32, color ui.Color, label
 func (a *app) opening(c *ui.Context) {
 	ui.Row(c).Gap(10).Center().Children(func() {
 		ui.Spinner(c).TextColor(ui.RGBA(255, 255, 255, 0.7))
-		ui.Text(c, i18n.T("Opening…")).FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.7))
+		ui.Text(c, openingLine(a.player)).FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.7))
 	})
+}
+
+// openingLine is what the stage says while an episode opens: the size of what
+// has come through so far, when that's a stream being made on the way.
+func openingLine(p *ui.VideoPlayer) string {
+	if n := streamedBytes(p); n > 0 {
+		return i18n.Tf("Opening… %s", megabytes(n))
+	}
+	return i18n.T("Opening…")
+}
+
+// megabytes writes a byte count as the MB a person reads, one decimal.
+func megabytes(n int64) string {
+	return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1, 64) + " MB"
 }
 
 // loading is the while of a page not yet there.
