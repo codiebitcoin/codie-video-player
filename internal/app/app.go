@@ -656,8 +656,8 @@ func (a *app) useTab(id string) {
 // their favorites folders, their saved collections, their watch-later list,
 // or a folder of the local source.
 func isPlaylistTab(id string) bool {
-	return id == "watchlater" || strings.HasPrefix(id, "fav:") || strings.HasPrefix(id, "season:") ||
-		strings.HasPrefix(id, "dir:")
+	return id == "watchlater" || id == "feed" || strings.HasPrefix(id, "fav:") ||
+		strings.HasPrefix(id, "season:") || strings.HasPrefix(id, "dir:") || strings.HasPrefix(id, "pl:")
 }
 
 // addLocalFolder asks for a folder and takes it into the local source, as a
@@ -1178,8 +1178,51 @@ func (a *app) nextEpisode(back bool) {
 		qat := a.queueAt + dir
 		if qat >= 0 && qat < len(a.queue) {
 			a.playQueueAt(qat)
+			return
 		}
 	}
+	// 信息流的队列没有尽头:这一页走完了,下一页接着来。
+	if dir > 0 && a.isFeedTab() {
+		a.feedContinue()
+	}
+}
+
+// isFeedTab reports whether the tab showing is a feed: a list that keeps
+// giving more, so there is always a next one.
+func (a *app) isFeedTab() bool {
+	return a.tabID == "feed" && !a.searching
+}
+
+// feedContinue asks the feed for its next page and plays on from there.
+func (a *app) feedContinue() {
+	src := a.sourceEntry
+	if src == nil || !src.src.Can("videoList") {
+		return
+	}
+	tab := a.tabID
+	next := a.gridPage + 1
+	go func() {
+		l, err := src.src.List(tab, next)
+		if err != nil || l == nil || len(l.Items) == 0 {
+			return
+		}
+		items := l.Items
+		for i := range items {
+			if items[i].Source == "" {
+				items[i].Source = src.id
+			}
+		}
+		a.post(func() {
+			if a.sourceEntry == nil || a.sourceEntry.id != src.id || a.tabID != tab {
+				return
+			}
+			a.gridPage = next
+			a.items = append(a.items, items...)
+			at := len(a.queue)
+			a.queue = append(a.queue, items...)
+			a.playQueueAt(at)
+		})
+	}()
 }
 
 // stopPlayer ends what plays, and its file — here or on the device.

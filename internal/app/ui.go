@@ -2041,9 +2041,12 @@ func (a *app) hasEpisode(dir int) bool {
 	}
 	if len(a.queue) > 1 {
 		qat := a.queueAt + dir
-		return qat >= 0 && qat < len(a.queue)
+		if qat >= 0 && qat < len(a.queue) {
+			return true
+		}
 	}
-	return false
+	// A feed always has a next one: its next page comes when the queue ends.
+	return dir > 0 && a.isFeedTab()
 }
 
 // scrubber is how far the episode is, which seeks where it is dragged or
