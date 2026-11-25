@@ -1,0 +1,31 @@
+{
+  "id": "xvideos",
+  "name": "XVideos",
+  "version": "0.1.0",
+  "minAppVersion": "0.1.35",
+  "kind": "video",
+  "main": "index.js",
+  "playback": "stream",
+  "defaultOff": true,
+  "permissions": {
+    "network": [
+      "xvideos.com",
+      "*.xvideos.com",
+      "*.xvideos-cdn.com"
+    ]
+  },
+  "requestHeaders": [
+    {
+      "hosts": [
+        "*.xvideos-cdn.com"
+      ],
+      "kinds": [
+        "image"
+      ],
+      "headers": {
+        "Referer": "https://www.xvideos.com/",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+      }
+    }
+  ]
+}
