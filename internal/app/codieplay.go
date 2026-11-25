@@ -437,6 +437,12 @@ readLoop:
 						if v, e := strconv.ParseInt(strings.TrimSpace(us), 10, 64); e == nil {
 							lastUS = v
 						}
+						continue
+					}
+					// ffmpeg's own complaints share the pipe with its progress;
+					// without them a pass that goes nowhere says nothing.
+					if line = strings.TrimSpace(line); line != "" && !strings.Contains(line, "=") {
+						log.Printf("codie ffmpeg: %s", line)
 					}
 				}
 			}
@@ -569,7 +575,13 @@ func probePlayableAsIs(s *video.Stream, headers map[string]string) bool {
 }
 
 // findFFprobe finds ffprobe beside ffmpeg.
+// findFFprobe finds ffprobe: the one the app ships, then one on PATH, then
+// the usual places. Without it a stream can't be asked what shape it is,
+// and every episode is transcoded rather than copied.
 func findFFprobe() string {
+	if p := bundledProgram("ffprobe"); p != "" {
+		return p
+	}
 	if p, err := exec.LookPath("ffprobe"); err == nil {
 		return p
 	}

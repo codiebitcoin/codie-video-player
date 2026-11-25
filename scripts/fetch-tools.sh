@@ -25,16 +25,22 @@ fetch() { # url dest
 	chmod +x "$2" 2>/dev/null || true
 }
 
-# 压缩包里的 ffmpeg 解出来。$1 是包，$2 是包内相对路径，$3 是落点。
+# 压缩包里的一个程序解出来。$1 是包地址，$2 是程序名，$3 是落点。
+# 同一个包里的第二个程序不会重下：包按地址留在缓存里。
 unpack() { # url name dest
 	if [ -s "$3" ]; then
 		echo "fetch-tools: have $3"
 		return
 	fi
 	mkdir -p "$(dirname "$3")"
+	cache=${TMPDIR:-/tmp}/fetch-tools-cache
+	mkdir -p "$cache"
+	arc=$cache/$(echo "$1" | cksum | cut -d' ' -f1)
+	if [ ! -s "$arc" ]; then
+		curl -fL --retry 3 ${proxy:+--proxy "$proxy"} -o "$arc.part" "$1"
+		mv "$arc.part" "$arc"
+	fi
 	tmp=$(mktemp -d)
-	arc=$tmp/archive
-	curl -fL --retry 3 ${proxy:+--proxy "$proxy"} -o "$arc" "$1"
 	case "$1" in
 	*.zip) unzip -q "$arc" -d "$tmp" ;;
 	*.tar.xz) tar -xJf "$arc" -C "$tmp" ;;
@@ -49,21 +55,26 @@ unpack() { # url name dest
 ytbase=https://github.com/yt-dlp/yt-dlp/releases/latest/download
 ffbase=https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest
 macffmpeg=https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip
+macffprobe=https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffprobe.zip
 
 one() {
 	case "$1" in
 	darwin)
 		fetch "$ytbase/yt-dlp_macos" resources/darwin/bin/yt-dlp
-		unpack "$macffmpeg" ffmpeg resources/darwin/bin/ffmpeg ;;
+		unpack "$macffmpeg" ffmpeg resources/darwin/bin/ffmpeg
+		unpack "$macffprobe" ffprobe resources/darwin/bin/ffprobe ;;
 	windows-amd64)
 		fetch "$ytbase/yt-dlp.exe" resources/windows-amd64/bin/yt-dlp.exe
-		unpack "$ffbase/ffmpeg-master-latest-win64-gpl.zip" ffmpeg.exe resources/windows-amd64/bin/ffmpeg.exe ;;
+		unpack "$ffbase/ffmpeg-master-latest-win64-gpl.zip" ffmpeg.exe resources/windows-amd64/bin/ffmpeg.exe
+		unpack "$ffbase/ffmpeg-master-latest-win64-gpl.zip" ffprobe.exe resources/windows-amd64/bin/ffprobe.exe ;;
 	linux-amd64)
 		fetch "$ytbase/yt-dlp_linux" resources/linux-amd64/bin/yt-dlp
-		unpack "$ffbase/ffmpeg-master-latest-linux64-gpl.tar.xz" ffmpeg resources/linux-amd64/bin/ffmpeg ;;
+		unpack "$ffbase/ffmpeg-master-latest-linux64-gpl.tar.xz" ffmpeg resources/linux-amd64/bin/ffmpeg
+		unpack "$ffbase/ffmpeg-master-latest-linux64-gpl.tar.xz" ffprobe resources/linux-amd64/bin/ffprobe ;;
 	linux-arm64)
 		fetch "$ytbase/yt-dlp_linux_aarch64" resources/linux-arm64/bin/yt-dlp
-		unpack "$ffbase/ffmpeg-master-latest-linuxarm64-gpl.tar.xz" ffmpeg resources/linux-arm64/bin/ffmpeg ;;
+		unpack "$ffbase/ffmpeg-master-latest-linuxarm64-gpl.tar.xz" ffmpeg resources/linux-arm64/bin/ffmpeg
+		unpack "$ffbase/ffmpeg-master-latest-linuxarm64-gpl.tar.xz" ffprobe resources/linux-arm64/bin/ffprobe ;;
 	*) echo "fetch-tools: unknown platform $1" >&2; exit 1 ;;
 	esac
 }
