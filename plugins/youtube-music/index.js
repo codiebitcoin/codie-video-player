@@ -331,7 +331,6 @@ function subtitleURL(j) {
   }
   return "";
 }
-}
 
 // ---------------------------------------------------------------------------
 // Account. Signing in is on YouTube's own page, once; the cookies it leaves
