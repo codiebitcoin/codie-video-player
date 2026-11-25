@@ -155,8 +155,15 @@ func (a *app) settingsContent(c *ui.Context) {
 				a.settingsSection(c, i18n.T("Network"), func() {
 					a.settingsRow(c, i18n.T("HTTP Proxy"), i18n.T("The app's asks go through it; the device and the intranet stay direct"), func() {
 						in := ui.TextInputBase(c.Key("proxy"), &a.settings.Proxy).Width(190).FontSize(12.5).
-							Placeholder(i18n.T("e.g. 10.0.0.14:7890"))
+							Placeholder(i18n.T("e.g. http://10.0.0.14:7890"))
+						// What's typed goes through as typed; Enter writes it
+						// back in the address's own shape, http:// and all.
+						if in.Changed() {
+							proxy.Set(a.settings.Proxy)
+							a.settings.save()
+						}
 						if in.Submitted() {
+							a.settings.Proxy = proxy.Normalize(a.settings.Proxy)
 							proxy.Set(a.settings.Proxy)
 							a.settings.save()
 						}
@@ -179,7 +186,7 @@ func (a *app) settingsContent(c *ui.Context) {
 						a.settingsRow(c, i18n.T("Tool Calls Served"), fmt.Sprintf("%d", n), nil)
 					}
 				})
-					a.settingsSection(c, i18n.T("Plugins"), func() {
+				a.settingsSection(c, i18n.T("Plugins"), func() {
 					for _, p := range a.plugins {
 						info := p.Info()
 						on := !a.pluginDisabled(info.ID)

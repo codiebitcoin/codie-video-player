@@ -30,6 +30,17 @@ func Set(addr string) {
 	}
 }
 
+// Normalize is the proxy address as the setting reads: the way it was typed
+// when it carries a scheme, and http:// in front when it doesn't, since that's
+// the proxy most machines there are.
+func Normalize(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" || strings.Contains(addr, "://") {
+		return addr
+	}
+	return "http://" + addr
+}
+
 // parse reads a proxy address, "host:port" taken as http, as its own kind of
 // URL: scheme http or https, a host, a port. Anything else is no proxy.
 func parse(addr string) *url.URL {

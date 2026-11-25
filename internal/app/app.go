@@ -4,6 +4,7 @@
 package app
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -31,9 +32,9 @@ import (
 type app struct {
 	win *mygo.Window
 
-		// The sources of videos: the local folders first, then the plugins. The
-		// one showing is embedded: what the grid holds is of it. localSrc is the
-		// local one, whose folders the settings keep.
+	// The sources of videos: the local folders first, then the plugins. The
+	// one showing is embedded: what the grid holds is of it. localSrc is the
+	// local one, whose folders the settings keep.
 	sources []sourceEntry
 	*sourceEntry
 	localSrc *local.Source
@@ -1233,13 +1234,13 @@ type settings struct {
 	// LocalFolders are the folders the local source plays, each one a group,
 	// in the order the viewer added them.
 	LocalFolders []string `json:"localFolders,omitempty"`
-		// DisabledSources are the built-in sources turned off. Kept so an older
-		// settings file still reads; Huangguo is a plugin now, and lives in
-		// DisabledPlugins.
-		DisabledSources []string `json:"disabledSources,omitempty"`
-		// SourcesChosen marks a settings file that names its sources, so a first
-		// run can start Huangguo off without turning it off again later.
-		SourcesChosen bool `json:"sourcesChosen,omitempty"`
+	// DisabledSources are the built-in sources turned off. Kept so an older
+	// settings file still reads; Huangguo is a plugin now, and lives in
+	// DisabledPlugins.
+	DisabledSources []string `json:"disabledSources,omitempty"`
+	// SourcesChosen marks a settings file that names its sources, so a first
+	// run can start Huangguo off without turning it off again later.
+	SourcesChosen bool `json:"sourcesChosen,omitempty"`
 	// SignInAsked are the sources whose sign-in was already asked for. A
 	// source asks once; after that the sidebar's own button is the way in.
 	SignInAsked []string `json:"signInAsked,omitempty"`
@@ -1260,33 +1261,37 @@ func loadSettings() *settings {
 	s := &settings{}
 	s.path = filepath.Join(userDataDir(""), "settings.json")
 	if b, err := os.ReadFile(s.path); err == nil {
+		// An editor on Windows may leave a UTF-8 BOM in front, which JSON
+		// doesn't take: without this the whole file reads as nothing and the
+		// settings go back to their defaults.
+		b = bytes.TrimPrefix(b, []byte("\xef\xbb\xbf"))
 		json.Unmarshal(b, s)
 	}
-		// A first run starts Huangguo off. It still ships with the app, as a
-		// plugin, and the settings turn it on. An older file that turned the
-		// built-in source off keeps it off, now as a plugin.
-		if !s.SourcesChosen {
-			if !containsString(s.DisabledPlugins, "huangguo") {
-				s.DisabledPlugins = append(s.DisabledPlugins, "huangguo")
-			}
-			s.SourcesChosen = true
-			s.save()
-		} else if containsString(s.DisabledSources, "huangguo") && !containsString(s.DisabledPlugins, "huangguo") {
+	// A first run starts Huangguo off. It still ships with the app, as a
+	// plugin, and the settings turn it on. An older file that turned the
+	// built-in source off keeps it off, now as a plugin.
+	if !s.SourcesChosen {
+		if !containsString(s.DisabledPlugins, "huangguo") {
 			s.DisabledPlugins = append(s.DisabledPlugins, "huangguo")
-			s.save()
 		}
-		return s
+		s.SourcesChosen = true
+		s.save()
+	} else if containsString(s.DisabledSources, "huangguo") && !containsString(s.DisabledPlugins, "huangguo") {
+		s.DisabledPlugins = append(s.DisabledPlugins, "huangguo")
+		s.save()
 	}
+	return s
+}
 
-	// containsString reports whether list holds s.
-	func containsString(list []string, s string) bool {
-		for _, v := range list {
-			if v == s {
-				return true
-			}
+// containsString reports whether list holds s.
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
 		}
-		return false
 	}
+	return false
+}
 
 // pluginsDir is where plugins are dropped in.
 func pluginsDir() string { return userDataDir("plugins") }
