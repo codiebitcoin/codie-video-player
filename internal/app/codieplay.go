@@ -115,6 +115,10 @@ const codieStallTicks = 85
 
 const codieSegmentSpanS = 30
 
+// codieResolveFresh is how long a stream's address is taken as young: longer
+// than this and the next segment asks for a fresh one.
+const codieResolveFresh = 90 * time.Second
+
 // codieFirstSegmentBytes and codieSegmentBytes are what a segment aims at:
 // about 10 MiB for the first, so it's quickly here, and 30 MiB after, so the
 // passes are few without crowding the device's one-session cap.
@@ -130,6 +134,7 @@ func (a *app) codieStream(ctx context.Context, s *video.Stream, rate, resumeS, t
 	from := resumeS
 	span := float64(codieSegmentSpanS)
 	made := 0
+	resolvedAt := time.Now()
 	for from < totalS {
 		if ctx.Err() != nil {
 			return // stopped: nothing more is made for it
@@ -137,6 +142,13 @@ func (a *app) codieStream(ctx context.Context, s *video.Stream, rate, resumeS, t
 		want := span
 		if rest := totalS - from; rest < want {
 			want = rest
+		}
+		// A signed address ages: ask again before a segment that starts well
+		// after the last ask, rather than waiting for its doors to close.
+		if resolve != nil && made > 0 && time.Since(resolvedAt) > codieResolveFresh {
+			if fresh, rerr := resolve(); rerr == nil {
+				s, resolvedAt = fresh, time.Now()
+			}
 		}
 		seg, err := a.codieMakeSegment(ctx, s, rate, from, want)
 		if err != nil && ctx.Err() == nil && resolve != nil {
@@ -195,6 +207,17 @@ func (a *app) codieStream(ctx context.Context, s *video.Stream, rate, resumeS, t
 			span = next
 		}
 		from += want
+		if totalS > 0 {
+			pct := int(from / totalS * 100)
+			if pct > 100 {
+				pct = 100
+			}
+			a.post(func() {
+				if a.codieBusy != "" && made > 0 {
+					a.codieBusy = i18n.Tf("Transcoding for the device… %d%% · %s", pct, megabytes(fileSize(seg.path)))
+				}
+			})
+		}
 		if made == 0 {
 			if !a.codieStartFirst(seg, gen, rate, from) {
 				removeCodieSegments([]codieSegment{seg})
