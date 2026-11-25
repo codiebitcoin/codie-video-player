@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	mrand "math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -275,6 +276,38 @@ func (a *app) agentToolCatalog() []clt01.Tool {
 			},
 		},
 		{
+			Name:        "random_play",
+			Version:     "v1",
+			Description: "随机挑一部视频立刻播放:从当前分类里随便取一个没看过的。观众说「随机播放一个视频」「随便放一个」「放点东西看看」「random video」「something random」「ランダムに再生」时用它。不需要参数。",
+			Parameters:  noArgs,
+			ResultSchema: objSchema(map[string]any{
+				"found":   map[string]any{"type": "boolean"},
+				"title":   sSchema,
+				"episode": sSchema,
+				"source":  sSchema,
+			}, "found"),
+			Risk: "reversible", Idempotent: false, TimeoutMS: 20000,
+			Handle: func(ctx context.Context, args json.RawMessage) (any, error) {
+				return a.toolsPickPlay(ctx, false)
+			},
+		},
+		{
+			Name:        "hot_play",
+			Version:     "v1",
+			Description: "播放当前源最热门的视频。观众说「播放最热视频」「放个最火的」「看看热门」「play the hottest」「show me what's popular」「一番人気を再生」时用它。不需要参数。",
+			Parameters:  noArgs,
+			ResultSchema: objSchema(map[string]any{
+				"found":   map[string]any{"type": "boolean"},
+				"title":   sSchema,
+				"episode": sSchema,
+				"source":  sSchema,
+			}, "found"),
+			Risk: "reversible", Idempotent: false, TimeoutMS: 20000,
+			Handle: func(ctx context.Context, args json.RawMessage) (any, error) {
+				return a.toolsPickPlay(ctx, true)
+			},
+		},
+		{
 			Name:        "set_speed",
 			Version:     "v1",
 			Description: "调整播放速度(倍速)。在电脑上立刻生效;在 codie 设备上需要重新转码,画面稍后才按新速度播。",
@@ -532,11 +565,11 @@ func (a *app) toolsRecommend(ctx context.Context) (any, error) {
 	var follows, history []library.Watched
 	var src *sourceEntry
 	var tabID string
-		readOnMain(func() {
-			if a.lib != nil && a.sourceEntry != nil {
-				follows, history = a.lib.Of(a.sourceEntry.id)
-			}
-			if a.sourceEntry != nil {
+	readOnMain(func() {
+		if a.lib != nil && a.sourceEntry != nil {
+			follows, history = a.lib.Of(a.sourceEntry.id)
+		}
+		if a.sourceEntry != nil {
 			s := *a.sourceEntry
 			src = &s
 		}
@@ -608,6 +641,76 @@ func (a *app) toolsRecommend(ctx context.Context) (any, error) {
 		st = a.playState()
 	})
 	out := map[string]any{"found": true, "title": st.Title, "reason": "热门", "source": src.name}
+	if st.Episode != "" {
+		out["episode"] = st.Episode
+	}
+	_ = ctx
+	return out, nil
+}
+
+// toolsPickPlay plays one video of the showing source: the hottest when hot is
+// set, a random one otherwise. It is what "随机播放一个视频" and "播放最热视频"
+// land on, whatever language they were said in.
+func (a *app) toolsPickPlay(ctx context.Context, hot bool) (any, error) {
+	var src *sourceEntry
+	var tabID string
+	readOnMain(func() {
+		if a.sourceEntry != nil {
+			s := *a.sourceEntry
+			src = &s
+		}
+		tabID = a.tabID
+	})
+	if src == nil || !src.src.Can("videoList") {
+		return map[string]any{"found": false}, nil
+	}
+	tab := tabID
+	if hot {
+		tab = ""
+		tabs, err := src.src.Tabs()
+		if err == nil {
+			for _, t := range tabs {
+				id := strings.ToLower(t.ID)
+				if strings.Contains(id, "hot") || strings.Contains(id, "popular") || strings.Contains(id, "rank") {
+					tab = t.ID
+					break
+				}
+			}
+			if tab == "" && len(tabs) > 0 {
+				tab = tabs[0].ID
+			}
+		}
+	}
+	if tab == "" {
+		return map[string]any{"found": false}, nil
+	}
+	page, err := src.src.List(tab, 1)
+	if err != nil || page == nil || len(page.Items) == 0 {
+		return map[string]any{"found": false}, nil
+	}
+	items := page.Items
+	var pick video.Item
+	if hot {
+		pick = items[0]
+	} else {
+		pick = items[mrand.IntN(len(items))]
+	}
+	if pick.ID == "" {
+		return map[string]any{"found": false}, nil
+	}
+	v, err := src.src.Video(pick.ID)
+	if err != nil || v == nil || len(v.Episodes) == 0 {
+		return map[string]any{"found": false}, nil
+	}
+	item, ep, at := pick, v.Episodes[0], 0
+	item.Source = src.id
+	var st playState
+	readOnMain(func() {
+		a.cancelNext()
+		a.playEpisode(item, ep, at)
+		st = a.playState()
+	})
+	out := map[string]any{"found": true, "title": st.Title, "source": src.name}
 	if st.Episode != "" {
 		out["episode"] = st.Episode
 	}

@@ -136,6 +136,7 @@ var zhCN = map[string]string{
 	"This episode needs ffmpeg to play; install it with your package manager and try again":                                                        "这一集要装了 ffmpeg 才能播:先用系统的包管理器装上,再放一次",
 	"This episode timed out opening; try again":                                                                                                    "这一集打开超时了,请重试",
 	"This episode timed out transcoding; try again":                                                                                                "这一集转码超时了,请重试",
+	"The rest of this episode couldn’t be made: %s":                                                                                          "这一集剩下的部分没能生成:%s",
 	"This episode transcodes past the device’s 128MiB cap, so it can’t play yet":                                                                   "这一集转出来超过了设备收的 128MiB,暂时放不了",
 	"This episode won’t play":                                                                                                                      "这一集放不了",
 	"This plugin needs ffmpeg / yt-dlp to open streams.":                                                                                           "这个插件要启动 ffmpeg / yt-dlp 才能取流。",

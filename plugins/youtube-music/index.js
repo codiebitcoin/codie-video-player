@@ -128,6 +128,7 @@ function itemOf(e) {
 // it left of them yt-dlp can't read, so a chip is a search of its own.
 // Live streams aren't listed: they have no stream this player can take.
 const FEEDS = [
+  { id: "feed", label: "For You", query: "" },
   { id: "hot", label: "Popular", query: "popular videos this week" },
   { id: "music", label: "Music", query: "official music video" },
   { id: "gaming", label: "Gaming", query: "gaming" },
@@ -145,9 +146,17 @@ const feedDepth = PER_PAGE * 2;
 
 let feedCache = null; // { at, tab, entries }
 
-async function feed(tab) {
+async function feed(tab, page) {
   const chip = FEEDS.find((f) => f.id === tab);
   if (!chip) throw fail("unsupported", t("no such page"));
+  if (chip.query === "") {
+    // For You: a fresh topic each page, so scrolling never runs out.
+    const q = TOPICS[Math.floor(Math.random() * TOPICS.length)];
+    const j = await ytdlp(["--flat-playlist", "--dump-single-json", `ytsearch${feedDepth}:${q}`]);
+    const entries = (j.entries || []).filter(playable);
+    shuffleItems(entries);
+    return entries;
+  }
   if (feedCache && feedCache.tab === tab && Date.now() - feedCache.at < feedFresh) {
     return feedCache.entries;
   }
@@ -155,6 +164,22 @@ async function feed(tab) {
   const entries = (j.entries || []).filter(playable);
   feedCache = { at: Date.now(), tab, entries };
   return entries;
+}
+
+// TOPICS are what For You draws from, one a page.
+const TOPICS = [
+  "documentary", "short film", "movie recap", "tech review", "science explained",
+  "cooking", "travel vlog", "standup comedy", "anime scene", "game highlights",
+  "music video", "live session", "history", "space", "car review",
+  "fitness", "photography", "diy build", "street food", "conspiracy debunked",
+];
+
+// shuffleItems mixes a batch, so the same topic doesn't read in the same order.
+function shuffleItems(items) {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
 }
 
 // videoTabs: the chips the sidebar lists. Live streams stay out: a live
@@ -181,7 +206,11 @@ export async function videoList({ tab, page }) {
   if (tab === "watchlater" || String(tab || "").startsWith("pl:")) {
     return playlistPage(String(tab), n);
   }
-  const entries = await feed(String(tab || ""));
+  if (tab === "feed") {
+    const items = (await feed("feed", n)).map(itemOf);
+    return { items, more: true };
+  }
+  const entries = await feed(String(tab || ""), n);
   return {
     items: entries.slice((n - 1) * PER_PAGE, n * PER_PAGE).map(itemOf),
     more: n * PER_PAGE < entries.length,

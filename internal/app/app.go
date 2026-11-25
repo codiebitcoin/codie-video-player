@@ -160,6 +160,10 @@ type app struct {
 	codieGen   uint64
 	codieState *codieout.MediaSessionState
 	codieBusy  string
+	// codieCancel ends the making of the episode's segments when the playback
+	// they were for is over: a stopped or replaced episode leaves no ffmpeg
+	// running behind it.
+	codieCancel func()
 	// 预转码:播放列表里下一部的第一集已经为设备转好,轮到它时不必再等。
 	prepared  *codiePrepared
 	precoding bool
@@ -999,7 +1003,9 @@ func (a *app) playEpisode(item video.Item, ep video.Episode, at int) {
 			}
 			log.Printf("codie play: resolved (%s, audio=%v)", s.Type, s.AudioURL != "")
 			// 转码和上传都在这条 goroutine 上,主线程只收结果。
-			a.playEpisodeOnDevice(item, ep, at, s, resumeAt)
+			a.playEpisodeOnDevice(item, ep, at, s, resumeAt, func() (*video.Stream, error) {
+				return src.src.Play(item.ID, ep.ID)
+			})
 		}()
 		return
 	}

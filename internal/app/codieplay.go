@@ -58,6 +58,10 @@ var findFFmpegFn = findFFmpeg
 // codieFFmpegTimeout is how long making the episode's MP4 may take.
 const codieFFmpegTimeout = 20 * time.Minute
 
+// probeTimeout is how long one ffprobe ask may take: a probe of an address
+// the network has left hanging must not hang the playback with it.
+const probeTimeout = 20 * time.Second
+
 // codiePollEvery is how often the window asks the device what the session is
 // doing.
 const codiePollEvery = 800 * time.Millisecond
@@ -67,11 +71,13 @@ const codiePollEvery = 800 * time.Millisecond
 // (0 plays from the top); the episode runs at whatever the app's rate is now,
 // which is baked into the file, for the device itself has no say over its
 // speed.
-func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *video.Stream, resumeS float64) {
+func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *video.Stream, resumeS float64, resolve func() (*video.Stream, error)) {
 	rate := a.rate
 	var gen uint64
+	ctx, cancel := context.WithCancel(context.Background())
 	a.post(func() {
 		a.stopPlayer()
+		a.codieCancel = cancel
 		gen = a.codieGen
 		a.playerErr = ""
 		a.playing = playing{item: item, ep: ep, at: at}
@@ -83,7 +89,7 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 	totalS := a.codieProbeSeconds(s, ep)
 	if totalS <= 0 {
 		// Nothing to cut by: the whole episode is made first, as before.
-		dst, err := a.codieMakeMP4(s, rate)
+		dst, err := a.codieMakeMP4(ctx, s, rate)
 		log.Printf("codie play: transcode done (err=%v)", err)
 		if err != nil {
 			a.post(func() {
@@ -98,7 +104,7 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 		a.codieShow(dst, rate, resumeS, gen)
 		return
 	}
-	a.codieStream(s, rate, resumeS, totalS, gen)
+	a.codieStream(ctx, s, rate, resumeS, totalS, gen, resolve)
 }
 
 // codieSegmentSpanS is how much of an episode the first segment holds: short,
@@ -116,19 +122,35 @@ const (
 // codieStream makes the episode in segments, each cut to stay under the
 // device's one-session cap, and plays the first as soon as it's made: the rest
 // follow while the first is on the screen.
-func (a *app) codieStream(s *video.Stream, rate, resumeS, totalS float64, gen uint64) {
+func (a *app) codieStream(ctx context.Context, s *video.Stream, rate, resumeS, totalS float64, gen uint64, resolve func() (*video.Stream, error)) {
 	from := resumeS
 	span := float64(codieSegmentSpanS)
 	made := 0
 	for from < totalS {
+		if ctx.Err() != nil {
+			return // stopped: nothing more is made for it
+		}
 		want := span
 		if rest := totalS - from; rest < want {
 			want = rest
 		}
-		seg, err := a.codieMakeSegment(s, rate, from, want)
+		seg, err := a.codieMakeSegment(ctx, s, rate, from, want)
+		if err != nil && ctx.Err() == nil && resolve != nil {
+			// An address ages: its doors close after a while, or after so
+			// many opens. One fresh ask is worth a retry before giving up.
+			if again, rerr := resolve(); rerr == nil {
+				log.Printf("codie play: segment %d (%.0fs+%.0fs) failed (%v); retrying with a fresh stream", made, from, want, err)
+				s = again
+				seg, err = a.codieMakeSegment(ctx, s, rate, from, want)
+			}
+		}
 		if err != nil {
+			if ctx.Err() != nil {
+				return // stopped while it was being made
+			}
 			log.Printf("codie play: segment %d (%.0fs+%.0fs) failed: %v", made, from, want, err)
 			idx := made
+			reason := err.Error()
 			a.post(func() {
 				if a.codieGen != gen {
 					return
@@ -138,15 +160,11 @@ func (a *app) codieStream(s *video.Stream, rate, resumeS, totalS float64, gen ui
 					a.playerErr = videoProblem(err, i18n.T("This episode won’t play"))
 					return
 				}
+				// Later segments failing leaves what was made playing; say
+				// why rather than falling silent.
 				a.codieMore = false
+				a.codieBusy = i18n.Tf("The rest of this episode couldn’t be made: %s", reason)
 			})
-			if made > 0 {
-				a.post(func() {
-					if a.codieGen == gen {
-						a.codieMore = false
-					}
-				})
-			}
 			return
 		}
 		// A span that came out over the device's cap is cut in half and made
@@ -236,7 +254,7 @@ func (a *app) codieStartFirst(seg codieSegment, gen uint64, rate, madeToS float6
 
 // codieMakeSegment makes one segment of the episode: the span from fromS, in
 // the shape the device takes.
-func (a *app) codieMakeSegment(s *video.Stream, rate, fromS, spanS float64) (codieSegment, error) {
+func (a *app) codieMakeSegment(ctx context.Context, s *video.Stream, rate, fromS, spanS float64) (codieSegment, error) {
 	ffmpeg := findFFmpegFn()
 	if ffmpeg == "" {
 		return codieSegment{}, errors.New(i18n.T("The device needs ffmpeg to take episodes; install it with your package manager and try again"))
@@ -248,9 +266,9 @@ func (a *app) codieMakeSegment(s *video.Stream, rate, fromS, spanS float64) (cod
 	dst := f.Name()
 	f.Close()
 	args := codieSegmentArgs(s, rate, fromS, spanS, subtitleFile(s), dst)
-	ctx, cancel := context.WithTimeout(context.Background(), codieFFmpegTimeout)
+	runCtx, cancel := context.WithTimeout(ctx, codieFFmpegTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, ffmpeg, args...)
+	cmd := exec.CommandContext(runCtx, ffmpeg, args...)
 	hideWindow(cmd)
 	cmd.Env = proxyEnv()
 	// 转的过程中说到做到多少 MB,免得界面只剩一个转圈的圈。
@@ -280,6 +298,9 @@ func (a *app) codieMakeSegment(s *video.Stream, rate, fromS, spanS float64) (cod
 	if err != nil {
 		os.Remove(dst)
 		if ctx.Err() != nil {
+			return codieSegment{}, ctx.Err() // the playback is over, not a failure
+		}
+		if runCtx.Err() != nil {
 			return codieSegment{}, errors.New(i18n.T("This episode timed out transcoding; try again"))
 		}
 		log.Printf("codie ffmpeg: %s", tailLine([]byte(said.String())))
@@ -347,7 +368,9 @@ func (a *app) codieProbeSeconds(s *video.Stream, ep video.Episode) float64 {
 		args = append(args, "-headers", hdr)
 	}
 	args = append(args, "-show_entries", "format=duration", "-of", "json", s.URL)
-	cmd := exec.Command(ffprobe, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ffprobe, args...)
 	hideWindow(cmd)
 	cmd.Env = proxyEnv()
 	out, err := cmd.Output()
@@ -627,7 +650,9 @@ func probeFileDurationMS(path string) int64 {
 	if ffprobe == "" {
 		return 0
 	}
-	out, err := exec.Command(ffprobe,
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, ffprobe,
 		"-v", "error",
 		"-show_entries", "format=duration",
 		"-of", "default=noprint_wrappers=1:nokey=1",
@@ -660,14 +685,14 @@ func codieResumeStart(resumeS, rate float64) int64 {
 // for at the usual speed) go through a plain copy, which takes seconds; the
 // rest are transcoded, which takes minutes — a copied stream can't change
 // its pace, so any other rate makes a full transcode of it.
-func (a *app) codieMakeMP4(s *video.Stream, rate float64) (string, error) {
+func (a *app) codieMakeMP4(parent context.Context, s *video.Stream, rate float64) (string, error) {
 	f, err := os.CreateTemp("", "codie-codie-*.mp4")
 	if err != nil {
 		return "", err
 	}
 	dst := f.Name()
 	f.Close()
-	if err := a.codieMakeMP4To(s, rate, dst); err != nil {
+	if err := a.codieMakeMP4To(parent, s, rate, dst); err != nil {
 		os.Remove(dst)
 		return "", err
 	}
@@ -675,19 +700,19 @@ func (a *app) codieMakeMP4(s *video.Stream, rate float64) (string, error) {
 }
 
 // codieMakeMP4To makes the episode's MP4 at dst.
-func (a *app) codieMakeMP4To(s *video.Stream, rate float64, dst string) error {
+func (a *app) codieMakeMP4To(parent context.Context, s *video.Stream, rate float64, dst string) error {
 	ffmpeg := findFFmpegFn()
 	if ffmpeg == "" {
 		return errors.New(i18n.T("The device needs ffmpeg to take episodes; install it with your package manager and try again"))
 	}
-	asIs := rate == 1 && probePlayableAsIs(s, s.Headers)
+	asIs := rate == 1 && probePlayableAsIs(parent, s, s.Headers)
 	if asIs {
 		log.Printf("codie play: streams already in device shape; copying")
 	} else {
 		log.Printf("codie play: streams need transcoding (rate %g)", rate)
 	}
 	args := codieFFmpegArgs(s, rate, asIs, dst)
-	ctx, cancel := context.WithTimeout(context.Background(), codieFFmpegTimeout)
+	ctx, cancel := context.WithTimeout(parent, codieFFmpegTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffmpeg, args...)
 	hideWindow(cmd)
@@ -859,7 +884,9 @@ func (a *app) codiePrepareNext() {
 			if err != nil {
 				return err
 			}
-			return a.codieMakeMP4To(s, rate, path)
+			ctx, cancel := context.WithTimeout(context.Background(), codieFFmpegTimeout)
+			defer cancel()
+			return a.codieMakeMP4To(ctx, s, rate, path)
 		}()
 		a.post(func() {
 			a.precoding = false
@@ -887,7 +914,7 @@ func cleanCodiePrepared() {
 // probePlayableAsIs asks ffprobe whether the stream already plays as the
 // device takes it: H.264 with AAC, no bigger than 1080p. The stream's own
 // headers go with every ask, for the CDN turns down strangers.
-func probePlayableAsIs(s *video.Stream, headers map[string]string) bool {
+func probePlayableAsIs(parent context.Context, s *video.Stream, headers map[string]string) bool {
 	ffprobe := findFFprobe()
 	if ffprobe == "" {
 		return false // 不知道,就当要转
@@ -898,7 +925,9 @@ func probePlayableAsIs(s *video.Stream, headers map[string]string) bool {
 	}
 	// 画面:要 H.264,不大于 1080p。
 	vargs := append(videoArgs, "-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height", "-of", "json")
-	vprobe := exec.Command(ffprobe, append(vargs, s.URL)...)
+	vctx, vcancel := context.WithTimeout(parent, probeTimeout)
+	defer vcancel()
+	vprobe := exec.CommandContext(vctx, ffprobe, append(vargs, s.URL)...)
 	hideWindow(vprobe)
 	vprobe.Env = proxyEnv()
 	out, err := vprobe.Output()
@@ -924,7 +953,9 @@ func probePlayableAsIs(s *video.Stream, headers map[string]string) bool {
 	// 声音:要 AAC。画面和声音分开的源才有这一问。
 	if s.AudioURL != "" {
 		aargs := append(videoArgs, "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "json")
-		aprobe := exec.Command(ffprobe, append(aargs, s.AudioURL)...)
+		actx, acancel := context.WithTimeout(parent, probeTimeout)
+		defer acancel()
+		aprobe := exec.CommandContext(actx, ffprobe, append(aargs, s.AudioURL)...)
 		hideWindow(aprobe)
 		aprobe.Env = proxyEnv()
 		aout, err := aprobe.Output()
@@ -1241,7 +1272,9 @@ func (a *app) codieRespeed(oldRate, newRate float64) {
 			})
 			return
 		}
-		a.playEpisodeOnDevice(item, ep, at, s, contentS/newRate)
+		a.playEpisodeOnDevice(item, ep, at, s, contentS/newRate, func() (*video.Stream, error) {
+			return src.src.Play(item.ID, ep.ID)
+		})
 	}()
 }
 
@@ -1303,6 +1336,10 @@ func (a *app) codieStatus() string {
 // all segment files made for it.
 func (a *app) stopPlayerForCodie() {
 	a.codieGen++
+	if a.codieCancel != nil {
+		a.codieCancel()
+		a.codieCancel = nil
+	}
 	a.codieSwitchingSeg = false
 	if session := a.codieSession; session != "" {
 		a.codieSession = ""

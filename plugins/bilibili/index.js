@@ -1566,6 +1566,7 @@ export async function videoPlay({ id, episode }) {
 // own feeds, a page of twenty to each.
 export async function videoTabs() {
   const tabs = [
+    { id: "feed", label: t("For You") },
     { id: "hot", label: t("Popular") },
     { id: "rank", label: t("Ranking") },
     { id: "new", label: t("Latest") },
@@ -1606,6 +1607,12 @@ export async function videoList({ tab, page }) {
     cover: image(r.pic),
     subtitle: [clean(r.owner?.name || r.author || ""), mmss(r.duration)].filter(Boolean).join(" · "),
   });
+  if (tab === "feed") {
+    // 首页推荐流:每页都是新的,翻不到底。
+    const d = await get("/x/web-interface/wbi/index/top/feed/rcmd", { ps: 20, fresh_idx: n, fresh_type: 4 }, { wbi: true });
+    const list = (d.item || []).map((it) => it || {}).filter((it) => it.bvid);
+    return { items: list.map(of), more: true };
+  }
   if (tab === "hot") {
     const d = await get("/x/web-interface/popular", { ps: 20, pn: n });
     return { items: (d.list || []).map(of), more: n < 30 };

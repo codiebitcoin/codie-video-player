@@ -1,7 +1,10 @@
 package app
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -425,5 +428,33 @@ func TestTakeCodiePrepared(t *testing.T) {
 	}
 	if _, _, ok := a.takeCodiePrepared(video.Item{ID: "a", Source: "youtube"}, video.Episode{ID: "1"}); ok {
 		t.Error("the same file was handed out twice")
+	}
+}
+
+func TestCodieStreamStopsWithThePlayback(t *testing.T) {
+	// A stopped playback stops making segments: a user who leaves an episode
+	// mid-way must not leave ffmpeg working on the rest of it.
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "ffmpeg")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := findFFmpegFn
+	findFFmpegFn = func() string { return fake }
+	defer func() { findFFmpegFn = old }()
+
+	a := &app{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		a.codieStream(ctx, &video.Stream{URL: "http://127.0.0.1:1/x"}, 1, 0, 600, 1, nil)
+		close(done)
+	}()
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the segment maker outlived the playback it was for")
 	}
 }

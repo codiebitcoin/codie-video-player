@@ -138,6 +138,7 @@ var jaJP = map[string]string{
 	"This episode needs ffmpeg to play; install it with your package manager and try again":                                                        "この話を再生するには ffmpeg が必要です。パッケージマネージャでインストールしてから、もう一度再生してください",
 	"This episode timed out opening; try again":                                                                                                    "この話の読み込みがタイムアウトしました。もう一度お試しください",
 	"This episode timed out transcoding; try again":                                                                                                "この話の変換がタイムアウトしました。もう一度お試しください",
+	"The rest of this episode couldn’t be made: %s":                                                                                          "このエピソードの残りを作れませんでした:%s",
 	"This episode transcodes past the device’s 128MiB cap, so it can’t play yet":                                                                   "変換後のサイズがデバイスの上限 128MiB を超えるため、まだ再生できません",
 	"This episode won’t play":                                                                                                                      "この話は再生できません",
 	"This plugin needs ffmpeg / yt-dlp to open streams.":                                                                                           "このプラグインはストリームを開くのに ffmpeg / yt-dlp を使います。",
