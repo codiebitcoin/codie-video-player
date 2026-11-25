@@ -214,6 +214,8 @@ type playing struct {
 // post runs fn on the main thread and redraws.
 func (a *app) post(fn func()) {
 	if a.win == nil {
+		// No window to hand it to, as in tests: it runs here.
+		fn()
 		return
 	}
 	a.win.Update(func() {
@@ -761,7 +763,6 @@ func (a *app) playPlaylist(items []video.Item, start int, shuffle bool) {
 		start = 0
 	}
 	a.detailOf = ""
-	a.feedMode = a.isFeedTab()
 	a.setQueue(list, start, a.currentTabLabel())
 	a.playQueueAt(start)
 }
@@ -792,6 +793,9 @@ func (a *app) playQueueAt(idx int) {
 		a.detailOf = it.ID
 	}
 	a.playEpisode(it, firstEpisodeOf(it), 0)
+	// playEpisode stops what was playing, which ends the last feed pass; a
+	// queue that came from the feed starts it again.
+	a.feedMode = a.isFeedTab()
 }
 
 // playItemFromGrid plays one card directly from the grid: if the grid is a
@@ -1069,6 +1073,12 @@ func (a *app) playEpisode(item video.Item, ep video.Episode, at int) {
 			}
 			if err != nil {
 				a.playerErr = err.Error()
+				return
+			}
+			if p == nil {
+				// No player and no error: nothing to show, but nothing to
+				// fall over on either.
+				a.playerErr = i18n.T("This episode won’t play")
 				return
 			}
 			a.player, a.playerFile = p, file

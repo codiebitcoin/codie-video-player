@@ -1566,6 +1566,7 @@ export async function videoPlay({ id, episode }) {
 // own feeds, a page of twenty to each.
 export async function videoTabs() {
   const tabs = [
+    { id: "random", label: t("Random") },
     { id: "feed", label: t("For You") },
     { id: "hot", label: t("Popular") },
     { id: "rank", label: t("Ranking") },
@@ -1607,6 +1608,29 @@ export async function videoList({ tab, page }) {
     cover: image(r.pic),
     subtitle: [clean(r.owner?.name || r.author || ""), mmss(r.duration)].filter(Boolean).join(" · "),
   });
+  if (tab === "random") {
+    // 随便看看:热门和推荐里各取一些,打乱成一页。
+    const out = [];
+    const take = async (fn) => {
+      try {
+        const d = await fn();
+        for (const it of d || []) out.push(it);
+      } catch (e) {
+        console.warn(`random: ${e.message}`);
+      }
+    };
+    await take(async () => (await get("/x/web-interface/popular", { ps: 20, pn: n })).list || []);
+    await take(async () => (d2 => (d2.item || []).map((x) => x))(await get("/x/web-interface/wbi/index/top/feed/rcmd", { ps: 20, fresh_idx: n }, { wbi: true })));
+    const seen = new Set();
+    const items = out
+      .filter((v) => v && v.bvid && !seen.has(v.bvid) && seen.add(v.bvid))
+      .map(of);
+    for (let i = items.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
+    return { items, more: true };
+  }
   if (tab === "feed") {
     // 首页推荐流:每页都是新的,翻不到底。
     const d = await get("/x/web-interface/wbi/index/top/feed/rcmd", { ps: 20, fresh_idx: n, fresh_type: 4 }, { wbi: true });
