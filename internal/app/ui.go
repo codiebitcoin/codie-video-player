@@ -246,7 +246,9 @@ func (a *app) sidebar(c *ui.Context) {
 	})
 }
 
-// sourcePicker is which of the sources of videos shows, by its name.
+// sourcePicker is which of the sources of videos shows, by its name: the name
+// over a pair of chevrons, as a popup button reads, and the choices in a panel
+// under it.
 func (a *app) sourcePicker(c *ui.Context) {
 	if len(a.sources) < 1 {
 		return
@@ -260,13 +262,50 @@ func (a *app) sourcePicker(c *ui.Context) {
 		}
 	}
 	chosen := names[max(at, 0)]
-	if ui.Select(c.Key("source"), &chosen, names).Width(sidebarWidth - 28).Changed() {
-		for i, n := range names {
-			if n == chosen {
-				a.useSource(a.sources[i].id)
+	sel := ui.SelectBase(c.Key("source"), &chosen)
+	sel.Trigger.Height(26).Padding(0, 6).Radius(6).Gap(5).AlignItems(ui.Center).Justify(ui.Start).
+		FocusRing(false).Label(chosen)
+	sel.Trigger.Background(sel.Trigger.AnimateColor("bg", hoverTint(sel.Trigger), ui.Animation{Duration: 120 * time.Millisecond}))
+	sel.Trigger.Children(func() {
+		ui.Text(c, chosen).FontSize(16.5).FontWeight(700).SingleLine().Shrink(1).MinWidth(0)
+		ui.Icon(c, iconUpDown).Size(13, 13).TextColor(colors.faint)
+	})
+	sel.Popup(func(panel ui.Element) {
+		panel.Padding(5).Radius(10).Background(colors.panel).Border(1, colors.panelBorder).
+			Shadow(0, 18, 44, -10, ui.RGBA(0, 0, 0, 0.55)).MinWidth(sidebarWidth - 28)
+		for _, name := range names {
+			item := sel.Item(name).Height(30).PaddingX(9).Radius(7).AlignItems(ui.Center).
+				Justify(ui.Start).FocusRing(false)
+			if item.Highlighted() {
+				item.Background(colors.accent).TextColor(colors.onAccent)
+			} else {
+				item.Background(colors.panel).TextColor(colors.text)
 			}
+			item.Children(func() {
+				ui.Text(c, name).FontSize(13).FontWeight(500).SingleLine()
+				ui.Spacer(c)
+				if name == chosen {
+					ui.Icon(c, iconCheck).Size(13, 13)
+				}
+			})
+		}
+	})
+	if !sel.Trigger.Changed() {
+		return
+	}
+	for i, n := range names {
+		if n == chosen {
+			a.useSource(a.sources[i].id)
 		}
 	}
+}
+
+// hoverTint is the soft fill a pressable row carries under the pointer.
+func hoverTint(e ui.Element) ui.Color {
+	if e.Hovered() || e.Pressed() {
+		return colors.hover
+	}
+	return ui.Transparent
 }
 
 // searchField is the search field atop the sidebar, which searches every
