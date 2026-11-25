@@ -1583,6 +1583,12 @@ func (a *app) stageContent(c *ui.Context, playing playing) {
 					ui.Spinner(c).TextColor(ui.RGBA(255, 255, 255, 0.7))
 					ui.Text(c, a.codieBusy).FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.7))
 				})
+			case a.codieSeam:
+				// 上一段放完、下一段还在路上:给一句加载,而不是一声不吭。
+				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+					ui.Spinner(c).TextColor(ui.RGBA(255, 255, 255, 0.7))
+					ui.Text(c, i18n.T("Continuing to the next part…")).FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.7))
+				})
 			default:
 				// What the device is doing with the episode, and how far it is.
 				state := i18n.T("Playing on the codie device’s screen")
@@ -2002,7 +2008,7 @@ func (a *app) controlsBody(c *ui.Context, playing playing) {
 			ui.Text(c, i18n.Tf("Next in %d s", a.nextLeft)).FontSize(12).TextColor(colors.accent).Shrink(0)
 		}
 	})
-	if a.deviceOutput && a.codie != nil && (a.codieBusy != "" || a.playerErr != "") {
+	if a.deviceOutput && a.codie != nil && (a.codieBusy != "" || a.playerErr != "" || a.codieSeam) {
 		ui.Text(c, a.codieStatus()).FontSize(12.5).TextColor(ui.RGBA(255, 255, 255, 0.6)).SingleLine()
 	}
 	// How far the episode is, with the clock at both of its ends.
@@ -2362,7 +2368,9 @@ func (a *app) codieScrubber(c *ui.Context) {
 }
 
 // codieTimes is how far and how long the episode is on the device, across
-// all split segments when an oversized episode was broken into pieces.
+// all split segments when an oversized episode was broken into pieces. The
+// length is the whole video's: the probe knew it before the first segment
+// was made, and the made-so-far sum only ever grows past it.
 func (a *app) codieTimes() (time.Duration, time.Duration) {
 	st := a.codieState
 	if st == nil {
@@ -2370,13 +2378,13 @@ func (a *app) codieTimes() (time.Duration, time.Duration) {
 	}
 	posMS := st.PositionMS
 	durMS := st.DurationMS
+	for _, v := range []int64{a.codieTotalMS, a.codieEpisodeMS} {
+		if v > durMS {
+			durMS = v
+		}
+	}
 	if len(a.codieSegs) > 1 && a.codieSegAt >= 0 && a.codieSegAt < len(a.codieSegs) {
 		posMS += a.codieSegs[a.codieSegAt].startMS
-		if a.codieTotalMS > 0 {
-			durMS = a.codieTotalMS
-		}
-	} else if a.codieTotalMS > durMS {
-		durMS = a.codieTotalMS
 	}
 	return time.Duration(posMS) * time.Millisecond, time.Duration(durMS) * time.Millisecond
 }

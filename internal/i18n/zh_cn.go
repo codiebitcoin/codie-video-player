@@ -122,6 +122,7 @@ var zhCN = map[string]string{
 	"Search failed":                        "搜索失败",
 	"Send Again":                           "重新发码",
 	"Sending to the device…":               "正在发送到设备…",
+	"Continuing to the next part…":         "正在接续下一段…",
 	"Settings":                             "设置",
 	"Settings — Codie Video":               "设置 — Codie 视频",
 	"Source %s":                            "来源 %s",

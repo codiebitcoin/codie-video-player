@@ -118,6 +118,14 @@ func (c *Client) Call(method, path string, body []byte, mode, contentType string
 // buildSigned prepares an http.Request with the X-Local-* signature headers.
 // fullPath may carry a query (only the path part is signed).
 func (c *Client) buildSigned(method, fullPath string, body []byte, payloadMode, bodyHash, contentType string) (*http.Request, error) {
+	return c.buildSignedBody(method, fullPath, bytes.NewReader(body), int64(len(body)), payloadMode, bodyHash, contentType)
+}
+
+// buildSignedBody is buildSigned for a body that streams: a multipart upload
+// hands the file's bytes straight from disk to the connection instead of
+// holding the whole of it in memory first. A negative bodyLen leaves the
+// length to the transport.
+func (c *Client) buildSignedBody(method, fullPath string, body io.Reader, bodyLen int64, payloadMode, bodyHash, contentType string) (*http.Request, error) {
 	cr := c.Creds
 	signPath := fullPath
 	if i := strings.IndexByte(signPath, '?'); i >= 0 {
@@ -132,12 +140,15 @@ func (c *Client) buildSigned(method, fullPath string, body []byte, payloadMode, 
 	}
 	mac := hmac.New(sha256.New, []byte(cr.Secret))
 	mac.Write([]byte(strings.ToUpper(method) + "|" + signPath + "|" + ts + "|" + nonce + "|" + payloadMode + "|" + bodyHash + "|" + cr.UserID))
-	req, err := http.NewRequest(method, baseURL(cr.Addr)+fullPath, bytes.NewReader(body))
+	req, err := http.NewRequest(method, baseURL(cr.Addr)+fullPath, body)
 	if err != nil {
 		return nil, err
 	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
+	}
+	if bodyLen >= 0 {
+		req.ContentLength = bodyLen
 	}
 	req.Header.Set("X-Local-Sig", hex.EncodeToString(mac.Sum(nil)))
 	req.Header.Set("X-Local-Nonce", nonce)

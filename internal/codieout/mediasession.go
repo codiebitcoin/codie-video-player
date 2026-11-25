@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -73,7 +74,9 @@ func newRequestID() string {
 }
 
 // CreateMediaSession uploads one file and opens a session of it on the
-// device's screen. It answers the session's id.
+// device's screen. It answers the session's id. The file streams from disk
+// into the request — a segment switch wants the upload quick, and a ninety
+// megabyte MP4 passing through memory twice first is the opposite of quick.
 func (c *Client) CreateMediaSession(path string, req MediaSessionRequest) (string, error) {
 	if req.RequestID == "" {
 		req.RequestID = newRequestID()
@@ -81,25 +84,46 @@ func (c *Client) CreateMediaSession(path string, req MediaSessionRequest) (strin
 	if req.ConflictPolicy == "" {
 		req.ConflictPolicy = "replace"
 	}
-	data, err := os.ReadFile(path)
+	request, err := json.Marshal(req)
 	if err != nil {
 		return "", err
 	}
-	var buf bytes.Buffer
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
 	boundary := "cvp" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	request, _ := json.Marshal(req)
-	buf.WriteString("--" + boundary + "\r\nContent-Disposition: form-data; name=\"request\"\r\nContent-Type: application/json\r\n\r\n" + string(request) + "\r\n")
-	buf.WriteString("--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + filepath.Base(path) + "\"\r\nContent-Type: video/mp4\r\n\r\n")
-	buf.Write(data)
-	buf.WriteString("\r\n--" + boundary + "--\r\n")
-	raw, err := c.Call("POST", apiMedia+"/sessions", buf.Bytes(), payloadMultipart, "multipart/form-data; boundary="+boundary)
+	head := []byte("--" + boundary + "\r\nContent-Disposition: form-data; name=\"request\"\r\nContent-Type: application/json\r\n\r\n" + string(request) + "\r\n" +
+		"--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + filepath.Base(path) + "\"\r\nContent-Type: video/mp4\r\n\r\n")
+	tail := []byte("\r\n--" + boundary + "--\r\n")
+	send := func() ([]byte, error) {
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+		// Fresh readers each try: the first one drains them, and a retry
+		// that reused them would send an envelope with nothing in it.
+		body := io.MultiReader(bytes.NewReader(head), f, bytes.NewReader(tail))
+		req, err := c.buildSignedBody("POST", apiMedia+"/sessions", body,
+			int64(len(head))+fi.Size()+int64(len(tail)), payloadMultipart, bodyHashUnsigned,
+			"multipart/form-data; boundary="+boundary)
+		if err != nil {
+			return nil, err
+		}
+		return c.doSigned(req)
+	}
+	raw, err := send()
 	if err != nil {
 		// The output is taken: something holds the screen. Free it and ask
 		// once more, so a play that arrives while another holds the screen
 		// still lands.
 		var apiErr *APIError
 		if errors.As(err, &apiErr) && apiErr.Code == "MEDIA_SESSION_BLOCKED" && c.releaseOutput() {
-			raw, err = c.Call("POST", apiMedia+"/sessions", buf.Bytes(), payloadMultipart, "multipart/form-data; boundary="+boundary)
+			raw, err = send()
 		}
 		if err != nil {
 			return "", err

@@ -123,6 +123,7 @@ var jaJP = map[string]string{
 	"Search failed":                        "検索に失敗しました",
 	"Send Again":                           "コードを再送",
 	"Sending to the device…":               "デバイスに送っています…",
+	"Continuing to the next part…":         "次のパートに切り替え中…",
 	"Settings":                             "設定",
 	"Settings — Codie Video":               "設定 — Codie ビデオ",
 	"Source %s":                            "ソース %s",

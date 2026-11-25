@@ -87,6 +87,14 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 
 	log.Printf("codie play: transcoding started")
 	totalS := a.codieProbeSeconds(s, ep)
+	if totalS > 0 {
+		// 这一集在设备文件时钟里的全长:进度条从第一秒起就是整个视频的。
+		a.post(func() {
+			if a.codieGen == gen {
+				a.codieEpisodeMS = int64(totalS / rate * 1000)
+			}
+		})
+	}
 	if totalS <= 0 {
 		// Nothing to cut by: the whole episode is made first, as before.
 		dst, err := a.codieMakeMP4(ctx, s, rate)
@@ -120,12 +128,26 @@ const codieSegmentSpanS = 30
 const codieResolveFresh = 90 * time.Second
 
 // codieFirstSegmentBytes and codieSegmentBytes are what a segment aims at:
-// about 10 MiB for the first, so it's quickly here, and 30 MiB after, so the
-// passes are few without crowding the device's one-session cap.
+// about 10 MiB for the first, so it's quickly here, and 90 MiB after — close
+// under the device's one-session cap, since every extra segment is another
+// seam to carry over.
 const (
 	codieFirstSegmentBytes = 10 << 20
-	codieSegmentBytes      = 30 << 20
+	codieSegmentBytes      = 90 << 20
 )
+
+// codieSeamMargin is the headroom a seam starts over the measured upload
+// time: the picture gives up at most this much of a segment's tail when the
+// next lands early, and shows at most this much of a stall when it's late.
+const codieSeamMargin = 800 * time.Millisecond
+
+// codieUploadSeed is the upload time assumed before any has been measured:
+// generous, for a black beat hurts more than a shaved beat of tail.
+const codieUploadSeed = 4 * time.Second
+
+// codiePollFast is how often the device is asked once a segment nears its
+// end: the seam's timing is only as good as the tick that fires it.
+const codiePollFast = 250 * time.Millisecond
 
 // codieStream makes the episode in segments, each cut to stay under the
 // device's one-session cap, and plays the first as soon as it's made: the rest
@@ -251,8 +273,10 @@ func (a *app) codieStartFirst(seg codieSegment, gen uint64, rate, madeToS float6
 			a.post(func() { a.deviceSlot = want })
 		}
 	}
+	t0 := time.Now()
 	session, err := codieOpenSessionFn(a.codie, seg.path, req)
-	log.Printf("codie play: first segment session=%q err=%v", session, err)
+	took := time.Since(t0)
+	log.Printf("codie play: first segment session=%q err=%v (upload %v)", session, err, took)
 	if err != nil {
 		return false
 	}
@@ -263,6 +287,7 @@ func (a *app) codieStartFirst(seg codieSegment, gen uint64, rate, madeToS float6
 			}
 			return
 		}
+		a.codieUploadTook(took)
 		a.codieBusy = ""
 		a.codieSegs = []codieSegment{seg}
 		a.codieSegAt = 0
@@ -498,6 +523,7 @@ func (a *app) codieShow(dst string, rate, resumeS float64, gen uint64) {
 		a.codieSegs = segs
 		a.codieSegAt = segIdx
 		a.codieTotalMS = totalMS
+		a.codieEpisodeMS = totalMS
 		a.codieSession = session
 		a.codieFile = segs[segIdx].path
 		// The speed moved on while the file was making; the file is at the
@@ -1038,12 +1064,15 @@ func findFFprobe() string {
 }
 
 // codiePoll asks the device what the session is doing, until it's over.
+// Near a segment's end it asks faster: the seam that swaps the next segment
+// in without a black beat is timed by these answers.
 func (a *app) codiePoll(sessionID string) {
 	go func() {
-		t := time.NewTicker(codiePollEvery)
-		defer t.Stop()
-		for range t.C {
-			if a.codieSession != sessionID || a.page != pagePlay || a.codie == nil {
+		gap := codiePollEvery
+		for {
+			time.Sleep(gap)
+			// 先看页面:窗口一关(测试里没有窗口),别的不必再看。
+			if a.page != pagePlay || a.codie == nil || a.codieSession != sessionID {
 				return
 			}
 			st, err := a.codie.MediaSessionState(sessionID)
@@ -1063,9 +1092,14 @@ func (a *app) codiePoll(sessionID string) {
 				a.post(func() {
 					if a.codieSession == sessionID {
 						a.codieState = st
+						a.codieSeamCheck(st)
 						a.codieEnded()
 					}
 				})
+			}
+			gap = codiePollEvery
+			if st.DurationMS > 0 && st.DurationMS-st.PositionMS < int64(20*time.Second/time.Millisecond) {
+				gap = codiePollFast
 			}
 		}
 	}()
@@ -1160,6 +1194,61 @@ func (a *app) startPlayOnCodie(item video.Item, ep video.Episode, at int) {
 	a.playEpisode(item, ep, at)
 }
 
+// codieSwitchWindow is how long before a segment's end the next one's upload
+// starts: the measured upload time plus a margin, so the new session lands
+// roughly as the old one runs out — early by no more than the margin, late
+// by no more than the guess is wrong.
+func (a *app) codieSwitchWindow() time.Duration {
+	base := a.codieUploadEMA
+	if base <= 0 {
+		base = float64(codieUploadSeed / time.Millisecond)
+	}
+	w := time.Duration(base)*time.Millisecond + codieSeamMargin
+	if w < 2*time.Second {
+		w = 2 * time.Second
+	}
+	return w
+}
+
+// codieUploadTook folds one measured upload time into the smooth one the
+// next seam starts from.
+func (a *app) codieUploadTook(d time.Duration) {
+	ms := float64(d / time.Millisecond)
+	if a.codieUploadEMA <= 0 {
+		a.codieUploadEMA = ms
+		return
+	}
+	a.codieUploadEMA = a.codieUploadEMA/2 + ms/2
+}
+
+// codieSeamCheck is the seam: while a segment plays and the next is within
+// reach of the window, the next session's upload starts before this one is
+// out, and the device swaps the moment the file lands — the picture goes on
+// without a black beat between the parts. When the next file isn't made yet,
+// it only lights the stage's loading line, which beats a silent screen.
+func (a *app) codieSeamCheck(st *codieout.MediaSessionState) {
+	if a.codieSwitchingSeg || st == nil || !st.IsPlaying || st.DurationMS <= 0 {
+		return
+	}
+	remain := time.Duration(st.DurationMS-st.PositionMS) * time.Millisecond
+	if remain > a.codieSwitchWindow() {
+		return
+	}
+	if a.codieSegAt+1 >= len(a.codieSegs) {
+		a.codieSeam = true // 下一段还在生成:先亮个加载,别黑着不说
+		return
+	}
+	a.codieSeam = true
+	a.codieSwitchingSeg = true
+	next := a.codieSegAt + 1
+	gen := a.codieGen
+	if a.win == nil {
+		a.codieSwitchSegment(gen, next, 0)
+		return
+	}
+	go a.codieSwitchSegment(gen, next, 0)
+}
+
 // codieEnded advances to the next segment when an oversized episode was split
 // into multiple files, or latches the next-episode (or next playlist item)
 // countdown once the last segment has played to its end.
@@ -1207,6 +1296,7 @@ func (a *app) codieAdvance() {
 	}
 	if !a.nextLatch {
 		a.nextLatch = true
+		a.codieSeam = false // 这一集到头了:倒计时接手,加载的话到此为止
 		a.startNextCountdown()
 		if a.win != nil {
 			a.win.Invalidate()
@@ -1255,8 +1345,10 @@ func (a *app) codieSwitchSegment(gen uint64, segIdx int, innerStartMS int64) {
 	if innerStartMS > 0 {
 		req.Playback.StartPositionMS = innerStartMS
 	}
+	t0 := time.Now()
 	session, err := codieOpenSessionFn(c, seg.path, req)
-	log.Printf("codie play: switch seg=%d/%d session=%q err=%v", segIdx+1, total, session, err)
+	took := time.Since(t0)
+	log.Printf("codie play: switch seg=%d/%d session=%q err=%v (upload %v)", segIdx+1, total, session, err, took)
 	apply := func() {
 		if a.codieGen != gen {
 			if session != "" && a.codie != nil {
@@ -1266,17 +1358,27 @@ func (a *app) codieSwitchSegment(gen uint64, segIdx int, innerStartMS int64) {
 		}
 		a.codieSwitchingSeg = false
 		if err != nil {
+			a.codieSeam = false
 			a.playerErr = videoProblem(err, i18n.T("The device didn’t take this episode"))
 			return
 		}
+		a.codieUploadTook(took)
+		// 换段上传的这几秒里要是有人按了暂停,新会话也得停着,不能自己放起来。
+		// 播完触发的换段不算:那不是暂停,是这一段放完了。
+		held := a.codieState != nil && !a.codieState.IsPlaying &&
+			a.codieState.DurationMS > 0 && a.codieState.PositionMS < a.codieState.DurationMS-1500
 		a.codieSegAt = segIdx
 		a.codieSession = session
 		a.codieFile = seg.path
+		a.codieSeam = false
 		a.codieState = &codieout.MediaSessionState{
 			SessionID:  session,
 			PositionMS: innerStartMS,
 			DurationMS: seg.durMS,
-			IsPlaying:  true,
+			IsPlaying:  !held,
+		}
+		if held {
+			codieMediaAction(a.codie, session, "pause", nil)
 		}
 		a.codiePoll(session)
 	}
@@ -1341,6 +1443,11 @@ func (a *app) codieSeek(ms int64) {
 	if len(a.codieSegs) > 1 {
 		segIdx, innerMS := codieSegmentForTime(a.codieSegs, ms)
 		if segIdx != a.codieSegAt {
+			// 拖进还没生成的段落时,停在目标段的末尾前:后面的段落还在生成,
+			// seek 到空气里只会让会话不明不白地结束。
+			if d := a.codieSegs[segIdx].durMS; d > 0 && innerMS > d-500 {
+				innerMS = max(0, d-500)
+			}
 			if !a.codieSwitchingSeg {
 				a.codieSwitchingSeg = true
 				gen := a.codieGen
@@ -1349,6 +1456,12 @@ func (a *app) codieSeek(ms int64) {
 			return
 		}
 		ms = innerMS
+	}
+	// 段内同理:进度条按整集画,拖出已生成的范围就停在末尾前。
+	if a.codieSegAt >= 0 && a.codieSegAt < len(a.codieSegs) {
+		if d := a.codieSegs[a.codieSegAt].durMS; d > 0 && ms > d-500 {
+			ms = max(0, d-500)
+		}
 	}
 	codieMediaAction(a.codie, a.codieSession, "seek", map[string]any{"position_ms": ms})
 }
@@ -1366,6 +1479,8 @@ func (a *app) codieStatus() string {
 	switch {
 	case a.codieBusy != "":
 		return a.codieBusy
+	case a.codieSeam:
+		return i18n.T("Continuing to the next part…")
 	case a.playerErr != "":
 		return a.playerErr
 	case a.codieSession == "":
@@ -1383,6 +1498,7 @@ func (a *app) stopPlayerForCodie() {
 		a.codieCancel = nil
 	}
 	a.codieSwitchingSeg = false
+	a.codieSeam = false
 	if session := a.codieSession; session != "" {
 		a.codieSession = ""
 		go func() {
@@ -1395,6 +1511,7 @@ func (a *app) stopPlayerForCodie() {
 	a.codieSegs = nil
 	a.codieSegAt = 0
 	a.codieTotalMS = 0
+	a.codieEpisodeMS = 0
 	file := a.codieFile
 	a.codieFile = ""
 	if len(segs) > 0 || file != "" {

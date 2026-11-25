@@ -153,7 +153,19 @@ type app struct {
 	codieSegs         []codieSegment
 	codieSegAt        int
 	codieTotalMS      int64
+	// codieEpisodeMS is the whole episode's length in the device file's clock,
+	// known from the probe before any but the first segment exists: the bar
+	// and the clock show the full video, not the part made so far.
+	codieEpisodeMS int64
 	codieSwitchingSeg bool
+	// codieSeam says the next part is on its way to the device while this one
+	// still plays (or this one is out and the next isn't made yet): the stage
+	// shows a loading line instead of pretending all is well.
+	codieSeam bool
+	// codieUploadEMA is how long an upload to the device has been taking,
+	// smoothed across sessions in milliseconds: the seam starts one margin
+	// earlier than it, so the swap lands as the old segment runs out.
+	codieUploadEMA float64
 	// codieMore says later segments are still being made: the last one on the
 	// screen mustn't count the next episode in while they are.
 	codieMore bool

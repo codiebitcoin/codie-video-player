@@ -458,3 +458,201 @@ func TestCodieStreamStopsWithThePlayback(t *testing.T) {
 		t.Fatal("the segment maker outlived the playback it was for")
 	}
 }
+
+// seamApp is an app on the device with a two-segment episode: segment 0
+// playing, segment 1 made and waiting, and a stub where the session opens.
+func seamApp(t *testing.T) (*app, chan string) {
+	t.Helper()
+	a := toolApp(t)
+	a.codie = codieout.New(&codieout.Creds{Addr: "127.0.0.1:1"})
+	a.deviceOutput = true
+	t.Cleanup(a.cancelNext)
+	a.codieSegs = []codieSegment{
+		{path: "seg0.mp4", startMS: 0, durMS: 600_000},
+		{path: "seg1.mp4", startMS: 600_000, durMS: 600_000},
+	}
+	a.codieSegAt = 0
+	a.codieSession = "sess-seg0"
+	opened := make(chan string, 4)
+	oldOpen := codieOpenSessionFn
+	codieOpenSessionFn = func(c *codieout.Client, path string, req codieout.MediaSessionRequest) (string, error) {
+		opened <- path
+		return "sess-" + path, nil
+	}
+	t.Cleanup(func() { codieOpenSessionFn = oldOpen })
+	return a, opened
+}
+
+func TestCodieSeamSwitchesWhilePlaying(t *testing.T) {
+	// The seam: with the next segment made and this one still playing inside
+	// the switch window, the next upload starts before this one ends — no
+	// black beat, and no next-episode countdown mid-episode either.
+	a, opened := seamApp(t)
+	a.codieState = &codieout.MediaSessionState{IsPlaying: true, PositionMS: 597_000, DurationMS: 600_000}
+	a.codieSeamCheck(a.codieState)
+	select {
+	case got := <-opened:
+		if got != "seg1.mp4" {
+			t.Fatalf("opened %q, want seg1.mp4", got)
+		}
+	default:
+		t.Fatal("the next segment's session never opened")
+	}
+	if a.codieSegAt != 1 {
+		t.Fatalf("segAt = %d, want 1 after the seam switch", a.codieSegAt)
+	}
+	if a.codieSeam {
+		t.Error("the seam was still lit after the next segment landed")
+	}
+	if a.nextLatch {
+		t.Error("mid-episode, but the next-episode countdown came")
+	}
+}
+
+func TestCodieSeamWaitsFarFromTheEnd(t *testing.T) {
+	// Far from the end nothing opens: the window is the last few seconds only.
+	a, opened := seamApp(t)
+	a.codieState = &codieout.MediaSessionState{IsPlaying: true, PositionMS: 60_000, DurationMS: 600_000}
+	a.codieSeamCheck(a.codieState)
+	select {
+	case got := <-opened:
+		t.Fatalf("opened %q with 9 minutes left", got)
+	default:
+	}
+	if a.codieSeam || a.codieSwitchingSeg {
+		t.Error("the seam lit with 9 minutes left")
+	}
+}
+
+func TestCodieSeamLightsWhileNextIsMade(t *testing.T) {
+	// Inside the window but the next file isn't made yet: nothing opens, but
+	// the stage says the next part is coming instead of going silent.
+	a, opened := seamApp(t)
+	a.codieSegs = a.codieSegs[:1] // 第二段还没生成
+	a.codieState = &codieout.MediaSessionState{IsPlaying: true, PositionMS: 597_000, DurationMS: 600_000}
+	a.codieSeamCheck(a.codieState)
+	select {
+	case got := <-opened:
+		t.Fatalf("opened %q with no second segment made", got)
+	default:
+	}
+	if !a.codieSeam {
+		t.Error("no loading line while the next part is being made")
+	}
+}
+
+func TestCodieSeamHoldsAPause(t *testing.T) {
+	// A pause pressed while the next segment uploads follows it over: the new
+	// session opens paused, not playing over the user's pause.
+	a, opened := seamApp(t)
+	var actions []string
+	oldAction := codieMediaAction
+	codieMediaAction = func(c *codieout.Client, session, action string, args map[string]any) {
+		actions = append(actions, action)
+	}
+	t.Cleanup(func() { codieMediaAction = oldAction })
+
+	// 换段还在路上时按了暂停:旧会话停在半路。
+	a.codieState = &codieout.MediaSessionState{IsPlaying: false, PositionMS: 300_000, DurationMS: 600_000}
+	a.codieSwitchSegment(a.codieGen, 1, 0)
+	if got := <-opened; got != "seg1.mp4" {
+		t.Fatalf("opened %q, want seg1.mp4", got)
+	}
+	if a.codieSegAt != 1 {
+		t.Fatalf("segAt = %d, want 1", a.codieSegAt)
+	}
+	if len(actions) != 1 || actions[0] != "pause" {
+		t.Fatalf("actions on the new session = %v, want one pause", actions)
+	}
+	if a.codieState == nil || a.codieState.IsPlaying {
+		t.Error("the new session was left playing over a pause")
+	}
+	// 播完触发的换段不算暂停:新会话照常放。
+	a.codieState = &codieout.MediaSessionState{IsPlaying: false, PositionMS: 599_500, DurationMS: 600_000}
+	a.codieSwitchSegment(a.codieGen, 0, 0)
+	if got := <-opened; got != "seg0.mp4" {
+		t.Fatalf("opened %q, want seg0.mp4", got)
+	}
+	if len(actions) != 1 {
+		t.Fatalf("actions after an end-of-segment switch = %v, want none new", actions)
+	}
+	if a.codieState == nil || !a.codieState.IsPlaying {
+		t.Error("an end-of-segment switch left the new session paused")
+	}
+}
+
+func TestCodieSwitchWindow(t *testing.T) {
+	// The window grows with what uploads have been taking, and never shrinks
+	// under two seconds: a too-early start shaves the tail, a too-late one
+	// shows black.
+	a := &app{}
+	if got := a.codieSwitchWindow(); got != codieUploadSeed+codieSeamMargin {
+		t.Errorf("unmeasured window = %v, want seed+margin %v", got, codieUploadSeed+codieSeamMargin)
+	}
+	a.codieUploadEMA = 100
+	if got := a.codieSwitchWindow(); got != 2*time.Second {
+		t.Errorf("window under a fast upload = %v, want the 2s floor", got)
+	}
+	a.codieUploadEMA = 10_000
+	if got := a.codieSwitchWindow(); got != 10_800*time.Millisecond {
+		t.Errorf("window over a 10s upload = %v, want 10.8s", got)
+	}
+	a.codieUploadTook(20 * time.Second)
+	if got := a.codieUploadEMA; got != 15_000 {
+		t.Errorf("EMA after a 20s upload = %v, want 15s (half of 10s and 20s)", got)
+	}
+}
+
+func TestCodieTimesShowsWholeEpisode(t *testing.T) {
+	// The bar and the clock speak of the whole video from the first second:
+	// the probe knew the episode's length before any but the first segment
+	// was made, and position carries the finished segments' share with it.
+	a := &app{}
+	a.codieState = &codieout.MediaSessionState{IsPlaying: true, PositionMS: 10_000, DurationMS: 30_000}
+	a.codieSegs = []codieSegment{{path: "s0.mp4", startMS: 0, durMS: 30_000}}
+	a.codieEpisodeMS = 1_200_000
+	pos, dur := a.codieTimes()
+	if pos != 10*time.Second || dur != 1200*time.Second {
+		t.Fatalf("one made segment: (%v, %v), want (10s, 1200s)", pos, dur)
+	}
+	a.codieSegs = append(a.codieSegs, codieSegment{path: "s1.mp4", startMS: 30_000, durMS: 30_000})
+	a.codieSegAt = 1
+	a.codieState = &codieout.MediaSessionState{IsPlaying: true, PositionMS: 5_000, DurationMS: 30_000}
+	pos, dur = a.codieTimes()
+	if pos != 35*time.Second || dur != 1200*time.Second {
+		t.Fatalf("into segment 1: (%v, %v), want (35s, 1200s)", pos, dur)
+	}
+}
+
+func TestCodieSeekClampsToMadeSegments(t *testing.T) {
+	// Dragging into a part that isn't made yet stops at the made segment's
+	// tail instead of seeking past its end into nothing.
+	a := toolApp(t)
+	a.codie = codieout.New(&codieout.Creds{Addr: "127.0.0.1:1"})
+	a.codieSegs = []codieSegment{{path: "seg0.mp4", startMS: 0, durMS: 600_000}}
+	a.codieSegAt = 0
+	a.codieSession = "sess-seg0"
+	seeked := make(chan int64, 4)
+	oldAction := codieMediaAction
+	codieMediaAction = func(c *codieout.Client, session, action string, args map[string]any) {
+		if action == "seek" {
+			seeked <- args["position_ms"].(int64)
+		}
+	}
+	t.Cleanup(func() { codieMediaAction = oldAction })
+
+	// 这一集全长 20 分钟,但只生成了前 10 分钟:拖到 19 分钟处,落在已生成段末尾前。
+	a.codieEpisodeMS = 1_200_000
+	a.codieSeek(1_150_000)
+	select {
+	case got := <-seeked:
+		if got != 599_500 {
+			t.Fatalf("seek into the unmade tail landed at %d, want clamped to 599500", got)
+		}
+	default:
+		t.Fatal("no seek went out")
+	}
+	if a.codieSegAt != 0 {
+		t.Fatalf("segAt = %d, a clamped seek shouldn't have switched segments", a.codieSegAt)
+	}
+}
