@@ -80,19 +80,250 @@ func (a *app) playEpisodeOnDevice(item video.Item, ep video.Episode, at int, s *
 	})
 
 	log.Printf("codie play: transcoding started")
-	dst, err := a.codieMakeMP4(s, rate)
-	log.Printf("codie play: transcode done (err=%v)", err)
-	if err != nil {
-		a.post(func() {
-			if a.codieGen != gen {
-				return
-			}
-			a.codieBusy = ""
-			a.playerErr = videoProblem(err, i18n.T("This episode won’t play"))
-		})
+	totalS := a.codieProbeSeconds(s, ep)
+	if totalS <= 0 {
+		// Nothing to cut by: the whole episode is made first, as before.
+		dst, err := a.codieMakeMP4(s, rate)
+		log.Printf("codie play: transcode done (err=%v)", err)
+		if err != nil {
+			a.post(func() {
+				if a.codieGen != gen {
+					return
+				}
+				a.codieBusy = ""
+				a.playerErr = videoProblem(err, i18n.T("This episode won’t play"))
+			})
+			return
+		}
+		a.codieShow(dst, rate, resumeS, gen)
 		return
 	}
-	a.codieShow(dst, rate, resumeS, gen)
+	a.codieStream(s, rate, resumeS, totalS, gen)
+}
+
+// codieSegmentSpanS is how much of an episode one segment holds at first: short
+// enough that the first picture comes soon, long enough to keep the passes few.
+const codieSegmentSpanS = 60
+
+// codieStream makes the episode in segments, each cut to stay under the
+// device's one-session cap, and plays the first as soon as it's made: the rest
+// follow while the first is on the screen.
+func (a *app) codieStream(s *video.Stream, rate, resumeS, totalS float64, gen uint64) {
+	from := resumeS
+	span := float64(codieSegmentSpanS)
+	made := 0
+	for from < totalS {
+		want := span
+		if rest := totalS - from; rest < want {
+			want = rest
+		}
+		seg, err := a.codieMakeSegment(s, rate, from, want)
+		if err != nil {
+			log.Printf("codie play: segment %d (%.0fs+%.0fs) failed: %v", made, from, want, err)
+			idx := made
+			a.post(func() {
+				if a.codieGen != gen {
+					return
+				}
+				if idx == 0 {
+					a.codieBusy = ""
+					a.playerErr = videoProblem(err, i18n.T("This episode won’t play"))
+					return
+				}
+				a.codieMore = false
+			})
+			if made > 0 {
+				a.post(func() {
+					if a.codieGen == gen {
+						a.codieMore = false
+					}
+				})
+			}
+			return
+		}
+		// A span that came out over the device's cap is cut in half and made
+		// again, so no segment is too big for one session.
+		if size := fileSize(seg.path); size > codieMaxFileBytes && want > 5 {
+			log.Printf("codie play: segment %d is %d bytes, over the cap; halving %.0fs", made, size, want)
+			os.Remove(seg.path)
+			span = want / 2
+			continue
+		}
+		log.Printf("codie play: segment %d made (%.0fs+%.0fs, %d bytes)", made, from, want, fileSize(seg.path))
+		from += want
+		if made == 0 {
+			if !a.codieStartFirst(seg, gen, rate, from) {
+				removeCodieSegments([]codieSegment{seg})
+				return
+			}
+		} else {
+			s := seg
+			a.post(func() { a.codieSegs = append(a.codieSegs, s) })
+		}
+		made++
+	}
+	a.post(func() {
+		if a.codieGen == gen {
+			a.codieMore = false
+		}
+	})
+}
+
+// codieStartFirst opens the device's session on the first segment and lets it
+// play, saying whether it took it.
+func (a *app) codieStartFirst(seg codieSegment, gen uint64, rate, madeToS float64) bool {
+	req := codieout.MediaSessionRequest{
+		Layout:         codieout.FullscreenLayout(),
+		Playback:       &codieout.MediaPlayback{Volume: a.vol / 100},
+		ConflictPolicy: "replace",
+	}
+	if want := a.slotChoice; want > 0 && want != a.deviceSlot && a.codie != nil {
+		if err := a.codie.UseSlot(want); err != nil {
+			log.Printf("codie play: switch slot %d: %v", want, err)
+		} else {
+			a.post(func() { a.deviceSlot = want })
+		}
+	}
+	session, err := codieOpenSessionFn(a.codie, seg.path, req)
+	log.Printf("codie play: first segment session=%q err=%v", session, err)
+	if err != nil {
+		return false
+	}
+	a.post(func() {
+		if a.codieGen != gen {
+			if a.codie != nil {
+				go a.codie.CloseMediaSession(session)
+			}
+			return
+		}
+		a.codieBusy = ""
+		a.codieSegs = []codieSegment{seg}
+		a.codieSegAt = 0
+		a.codieTotalMS = 0
+		a.codieSession = session
+		a.codieFile = seg.path
+		a.codieMore = true
+		if a.rate != rate {
+			go a.codieRespeed(rate, a.rate)
+			return
+		}
+		a.codiePoll(session)
+	})
+	return true
+}
+
+// codieMakeSegment makes one segment of the episode: the span from fromS, in
+// the shape the device takes.
+func (a *app) codieMakeSegment(s *video.Stream, rate, fromS, spanS float64) (codieSegment, error) {
+	ffmpeg := findFFmpegFn()
+	if ffmpeg == "" {
+		return codieSegment{}, errors.New(i18n.T("The device needs ffmpeg to take episodes; install it with your package manager and try again"))
+	}
+	f, err := os.CreateTemp("", "codie-seg-*.mp4")
+	if err != nil {
+		return codieSegment{}, err
+	}
+	dst := f.Name()
+	f.Close()
+	args := codieSegmentArgs(s, rate, fromS, spanS, dst)
+	ctx, cancel := context.WithTimeout(context.Background(), codieFFmpegTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ffmpeg, args...)
+	cmd.Env = proxyEnv()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		os.Remove(dst)
+		if ctx.Err() != nil {
+			return codieSegment{}, errors.New(i18n.T("This episode timed out transcoding; try again"))
+		}
+		return codieSegment{}, fmt.Errorf("%s", tailLine(out))
+	}
+	return codieSegment{path: dst, durMS: probeFileDurationMS(dst)}, nil
+}
+
+// codieSegmentArgs is ffmpeg's arguments for one segment: the window asked
+// for, in the device's shape, at the pace asked for.
+func codieSegmentArgs(s *video.Stream, rate, fromS, spanS float64, dst string) []string {
+	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}
+	hdr := ffmpegHeaders(s.Headers)
+	input := func(url string) {
+		if hdr != "" {
+			args = append(args, "-headers", hdr)
+		}
+		if fromS > 0 {
+			args = append(args, "-ss", strconv.FormatFloat(fromS, 'f', 3, 64))
+		}
+		args = append(args, "-reconnect", "1", "-reconnect_streamed", "1",
+			"-reconnect_delay_max", "5", "-rw_timeout", "15000000", "-i", url)
+	}
+	input(s.URL)
+	if s.AudioURL != "" {
+		input(s.AudioURL)
+		args = append(args, "-map", "0:v:0", "-map", "1:a:0?")
+	} else {
+		args = append(args, "-map", "0:v:0?", "-map", "0:a:0?")
+	}
+	if spanS > 0 {
+		args = append(args, "-t", strconv.FormatFloat(spanS, 'f', 3, 64))
+	}
+	if rate != 1 {
+		args = append(args,
+			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+			"-vf", fmt.Sprintf("setpts=PTS/%g,scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2", rate),
+			"-c:a", "aac", "-b:a", "160k",
+			"-af", fmt.Sprintf("atempo=%g", rate))
+	} else {
+		args = append(args,
+			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+			"-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2",
+			"-c:a", "aac", "-b:a", "160k")
+	}
+	return append(args, "-movflags", "+faststart", dst)
+}
+
+// codieProbeSeconds is how long the episode is, from what the source said, or
+// from ffprobe when it didn't. Zero means nobody knows.
+func (a *app) codieProbeSeconds(s *video.Stream, ep video.Episode) float64 {
+	if ep.Seconds > 0 {
+		return float64(ep.Seconds)
+	}
+	ffprobe := findFFprobe()
+	if ffprobe == "" {
+		return 0
+	}
+	args := []string{"-v", "error"}
+	if hdr := ffmpegHeaders(s.Headers); hdr != "" {
+		args = append(args, "-headers", hdr)
+	}
+	args = append(args, "-show_entries", "format=duration", "-of", "json", s.URL)
+	cmd := exec.Command(ffprobe, args...)
+	cmd.Env = proxyEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		log.Printf("codie probe duration: %v", err)
+		return 0
+	}
+	var f struct {
+		Format struct {
+			Duration string `json:"duration"`
+		} `json:"format"`
+	}
+	if json.Unmarshal(out, &f) != nil {
+		return 0
+	}
+	d, err := strconv.ParseFloat(f.Format.Duration, 64)
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
+}
+
+// fileSize is how many bytes a file takes, or 0 when it can't be read.
+func fileSize(path string) int64 {
+	if info, err := os.Stat(path); err == nil {
+		return info.Size()
+	}
+	return 0
 }
 
 // codieShow splits what's over the device's one-session cap into segments,
@@ -806,6 +1037,24 @@ func (a *app) codieEnded() {
 			nextSeg := a.codieSegAt + 1
 			gen := a.codieGen
 			go a.codieSwitchSegment(gen, nextSeg, 0)
+		}
+		return
+	}
+	if a.codieMore {
+		// The next segment is still being made: hold on to this one's last
+		// frame and ask again shortly, rather than counting the next episode in.
+		if !a.codieSwitchingSeg {
+			a.codieSwitchingSeg = true
+			gen := a.codieGen
+			time.AfterFunc(1500*time.Millisecond, func() {
+				a.post(func() {
+					if a.codieGen != gen {
+						return
+					}
+					a.codieSwitchingSeg = false
+					a.codieEnded()
+				})
+			})
 		}
 		return
 	}

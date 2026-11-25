@@ -153,9 +153,12 @@ type app struct {
 	codieSegAt        int
 	codieTotalMS      int64
 	codieSwitchingSeg bool
-	codieGen          uint64
-	codieState        *codieout.MediaSessionState
-	codieBusy         string
+	// codieMore says later segments are still being made: the last one on the
+	// screen mustn't count the next episode in while they are.
+	codieMore  bool
+	codieGen   uint64
+	codieState *codieout.MediaSessionState
+	codieBusy  string
 	// 预转码:播放列表里下一部的第一集已经为设备转好,轮到它时不必再等。
 	prepared  *codiePrepared
 	precoding bool
