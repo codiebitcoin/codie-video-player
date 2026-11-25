@@ -156,10 +156,16 @@ type app struct {
 	codieSwitchingSeg bool
 	// codieMore says later segments are still being made: the last one on the
 	// screen mustn't count the next episode in while they are.
-	codieMore  bool
-	codieGen   uint64
-	codieState *codieout.MediaSessionState
-	codieBusy  string
+	codieMore bool
+	// feedMode is on while a feed plays: one item after another with no
+	// countdown between them, which is the point of a feed.
+	feedMode bool
+	// feedAutostart says a feed tab was just opened: its first page starts
+	// playing as soon as it's here.
+	feedAutostart bool
+	codieGen      uint64
+	codieState    *codieout.MediaSessionState
+	codieBusy     string
 	// codieCancel ends the making of the episode's segments when the playback
 	// they were for is over: a stopped or replaced episode leaves no ffmpeg
 	// running behind it.
@@ -646,6 +652,7 @@ func (a *app) useTab(id string) {
 		return
 	}
 	a.tabID = id
+	a.feedAutostart = id == "feed"
 	a.searching = false
 	a.playlistQuery = ""
 	a.clearGrid()
@@ -754,6 +761,7 @@ func (a *app) playPlaylist(items []video.Item, start int, shuffle bool) {
 		start = 0
 	}
 	a.detailOf = ""
+	a.feedMode = a.isFeedTab()
 	a.setQueue(list, start, a.currentTabLabel())
 	a.playQueueAt(start)
 }
@@ -890,6 +898,11 @@ func (a *app) loadMore() {
 				if a.items[i].Source == "" {
 					a.items[i].Source = src.id
 				}
+			}
+			// A feed that was just opened starts on its own, from the top.
+			if a.feedAutostart && next == 1 && len(a.items) > 0 {
+				a.feedAutostart = false
+				a.playPlaylist(a.items, 0, false)
 			}
 		})
 	}()
@@ -1123,6 +1136,12 @@ func (a *app) stopWatchTicker() {
 // startNextCountdown counts the seconds to the next episode, showing them on
 // the stage, and plays it when they run out.
 func (a *app) startNextCountdown() {
+	if a.feedMode {
+		// A feed keeps going: no countdown to sit through, and the setting
+		// that stops auto-play bows to it.
+		a.nextEpisode(false)
+		return
+	}
 	if a.nextTimer != nil || !a.hasEpisode(1) || a.settings == nil || a.settings.NoAutoNext {
 		return
 	}
@@ -1228,6 +1247,7 @@ func (a *app) feedContinue() {
 // stopPlayer ends what plays, and its file — here or on the device.
 func (a *app) stopPlayer() {
 	a.cancelNext()
+	a.feedMode = false
 	a.stopWatchTicker()
 	if a.controlsTmr != nil {
 		a.controlsTmr.Stop()
