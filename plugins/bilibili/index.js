@@ -1523,12 +1523,14 @@ export async function videoPlay({ id, episode }) {
   }
   const dash = d.dash;
   if (!dash) throw fail("unavailable", t("Bilibili has no video for this video"));
+  const cap = +(typeof host.setting === "function" ? host.setting("maxHeight") : 0) || 0;
   const best = (list) => {
     const ok = (list || [])
       .filter((x) => (x.baseUrl || x.base_url) && !/^dv/i.test(x.codecs || ""))
       .sort((a, b) => b.bandwidth - a.bandwidth);
-    // 设备的屏幕小:720p 够了就不挑更高的,下载快、传得动。
-    const mid = ok.filter((x) => (x.height || 1080) <= 720);
+    // 默认 720p 够了:下载快、传得动。监听者在设置里选了别的就按那个来。
+    const want = cap > 0 ? cap : 720;
+    const mid = ok.filter((x) => (x.height || 1080) <= want);
     return pick(mid.length ? mid : ok);
   };
   const pick = (pool) => pool.sort((a, b) => b.bandwidth - a.bandwidth)[0];

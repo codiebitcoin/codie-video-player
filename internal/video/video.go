@@ -63,6 +63,10 @@ type Stream struct {
 	AudioURL string            `json:"audioUrl,omitempty"`
 	Type     string            `json:"type"` // hls or mp4
 	Headers  map[string]string `json:"headers,omitempty"`
+	// SubtitlesURL is where the source's subtitles are, when it has any and
+	// the listener asked for them: a WebVTT or SRT file, burnt into the
+	// picture as it plays, for the player has no track of its own.
+	SubtitlesURL string `json:"subtitlesUrl,omitempty"`
 }
 
 // Info is how a source introduces itself.

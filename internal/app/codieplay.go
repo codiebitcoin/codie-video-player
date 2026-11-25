@@ -225,7 +225,7 @@ func (a *app) codieMakeSegment(s *video.Stream, rate, fromS, spanS float64) (cod
 	}
 	dst := f.Name()
 	f.Close()
-	args := codieSegmentArgs(s, rate, fromS, spanS, dst)
+	args := codieSegmentArgs(s, rate, fromS, spanS, subtitleFile(s), dst)
 	ctx, cancel := context.WithTimeout(context.Background(), codieFFmpegTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffmpeg, args...)
@@ -268,7 +268,7 @@ func (a *app) codieMakeSegment(s *video.Stream, rate, fromS, spanS float64) (cod
 
 // codieSegmentArgs is ffmpeg's arguments for one segment: the window asked
 // for, in the device's shape, at the pace asked for.
-func codieSegmentArgs(s *video.Stream, rate, fromS, spanS float64, dst string) []string {
+func codieSegmentArgs(s *video.Stream, rate, fromS, spanS float64, sub, dst string) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}
 	hdr := ffmpegHeaders(s.Headers)
 	input := func(url string) {
@@ -291,16 +291,20 @@ func codieSegmentArgs(s *video.Stream, rate, fromS, spanS float64, dst string) [
 	if spanS > 0 {
 		args = append(args, "-t", strconv.FormatFloat(spanS, 'f', 3, 64))
 	}
+	shape := "scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2"
+	if sub != "" {
+		shape += "," + subtitleFilter(sub)
+	}
 	if rate != 1 {
 		args = append(args,
 			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-			"-vf", fmt.Sprintf("setpts=PTS/%g,scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2", rate),
+			"-vf", fmt.Sprintf("setpts=PTS/%g,", rate)+shape,
 			"-c:a", "aac", "-b:a", "160k",
 			"-af", fmt.Sprintf("atempo=%g", rate))
 	} else {
 		args = append(args,
 			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-			"-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2",
+			"-vf", shape,
 			"-c:a", "aac", "-b:a", "160k")
 	}
 	return append(args, "-movflags", "+faststart", dst)

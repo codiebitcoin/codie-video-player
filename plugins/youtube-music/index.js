@@ -219,12 +219,22 @@ function isHLS(f) {
   return /m3u8/i.test(String(f.protocol || ""));
 }
 
+// maxHeight is the tallest picture the listener asked for, from the app's
+// settings; 0 is the best the source has.
+function maxHeight() {
+  const n = +(typeof host.setting === "function" ? host.setting("maxHeight") : 0) || 0;
+  return n > 0 ? n : 0;
+}
+
 // worth is the order streams are taken in: the tallest that is served as one
-// file, before any playlist. YouTube lists its HLS variants among the others,
-// and they're the slowest to read and the least sure to play.
+// file, before any playlist, and never taller than the listener asked for
+// unless nothing else is there. YouTube lists its HLS variants among the
+// others, and they're the slowest to read and the least sure to play.
 function worth(f) {
   const height = Math.max(+(f.height || 0), +(f.width || 0));
-  return (isHLS(f) ? 0 : 1) * 10000 + height;
+  const cap = maxHeight();
+  const over = cap > 0 && height > cap;
+  return (over ? 0 : 10000) + (isHLS(f) ? 0 : 10000) + height;
 }
 
 // pick finds the worthiest stream of a video's formats: a stream with both
@@ -262,9 +272,36 @@ export async function videoPlay({ id }) {
     throw fail("unavailable", "no playable stream for this video");
   }
   const type = picked.hls ? "hls" : "mp4";
-  return picked.audioUrl
+  const wantSubs = (typeof host.setting === "function" ? host.setting("subtitles") : "0") === "1";
+  const subs = wantSubs ? subtitleURL(j) : "";
+  const out = picked.audioUrl
     ? { url: picked.url, audioUrl: picked.audioUrl, type }
     : { url: picked.url, type };
+  if (subs) out.subtitlesUrl = subs;
+  return out;
+}
+
+// subtitleURL is where YouTube's own subtitles are for a video: the listener's
+// language first, English after, a manual track before an automatic one.
+function subtitleURL(j) {
+  const want = String((typeof host.language === "function" && host.language()) || "en").toLowerCase();
+  const prefs = [want, "en", "zh-Hans", "zh-CN", "ja"];
+  for (const bank of [j.subtitles, j.automatic_captions]) {
+    if (!bank) continue;
+    for (const lang of prefs) {
+      const key = Object.keys(bank).find((k) => k.toLowerCase() === lang.toLowerCase());
+      if (!key) continue;
+      const list = (bank[key] || []).filter((e) => e && e.url);
+      const vtt = list.find((e) => /vtt/i.test(e.ext || "")) || list.find((e) => /srt/i.test(e.ext || "")) || list[0];
+      if (vtt) return vtt.url;
+    }
+    for (const key of Object.keys(bank)) {
+      const list = (bank[key] || []).filter((e) => e && e.url);
+      if (list.length) return list[0].url;
+    }
+  }
+  return "";
+}
 }
 
 // ---------------------------------------------------------------------------

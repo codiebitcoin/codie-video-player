@@ -61,7 +61,8 @@ func streamThroughFFmpeg(s *video.Stream, startS float64) (*ui.VideoPlayer, stri
 	if ffmpeg == "" {
 		return nil, "", false, errors.New(i18n.T("This episode needs ffmpeg to play; install it with your package manager and try again"))
 	}
-	args := streamFFmpegArgs(s, startS)
+	sub := subtitleFile(s)
+	args := streamFFmpegArgs(s, sub, startS)
 	cmd := exec.Command(ffmpeg, args...)
 	hideWindow(cmd)
 	cmd.Env = proxyEnv()
@@ -151,7 +152,7 @@ func stopStream(p *ui.VideoPlayer) {
 // streamFFmpegArgs is what ffmpeg gets for a stream the player watches as it
 // is made: one fragmented mp4 on stdout, its pieces independent so a player
 // can start on the first of them.
-func streamFFmpegArgs(s *video.Stream, startS float64) []string {
+func streamFFmpegArgs(s *video.Stream, sub string, startS float64) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
 	hdr := ffmpegHeaders(s.Headers)
 	input := func(url string) {
@@ -172,13 +173,61 @@ func streamFFmpegArgs(s *video.Stream, startS float64) []string {
 	} else {
 		args = append(args, "-map", "0:v:0?", "-map", "0:a:0?")
 	}
+	filters := "scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2"
+	if sub != "" {
+		filters += "," + subtitleFilter(sub)
+	}
 	args = append(args,
 		"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-		"-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2",
+		"-vf", filters,
 		"-c:a", "aac", "-b:a", "160k",
 		"-f", "mp4", "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
 		"pipe:1")
 	return args
+}
+
+// subtitleFile fetches the stream's subtitles to a local file, since ffmpeg's
+// subtitles filter reads files, and answers its path, or "" when there are
+// none to have.
+func subtitleFile(s *video.Stream) string {
+	if s.SubtitlesURL == "" {
+		return ""
+	}
+	req, err := http.NewRequest("GET", s.SubtitlesURL, nil)
+	if err != nil {
+		return ""
+	}
+	for k, v := range s.Headers {
+		req.Header.Set(k, v)
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("subtitles: %v", err)
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("subtitles: HTTP %d", resp.StatusCode)
+		return ""
+	}
+	f, err := os.CreateTemp("", "codie-sub-*.vtt")
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	if _, err := io.Copy(f, io.LimitReader(resp.Body, 4<<20)); err != nil {
+		os.Remove(f.Name())
+		return ""
+	}
+	return f.Name()
+}
+
+// subtitleFilter is the subtitles filter for a file: a path needs its colons
+// and backslashes escaped, which Windows paths are full of.
+func subtitleFilter(path string) string {
+	esc := strings.NewReplacer(`\`, `\\`, `:`, `\:`, `'`, `\'`).Replace(path)
+	return "subtitles='" + esc + "'"
 }
 
 // streamBuf holds what ffmpeg has written so far, for the one reader serving

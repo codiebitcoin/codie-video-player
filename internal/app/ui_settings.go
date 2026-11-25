@@ -127,6 +127,45 @@ func (a *app) settingsContent(c *ui.Context) {
 							a.settings.save()
 						}
 					})
+					a.settingsRow(c, i18n.T("Resolution"), i18n.T("The tallest picture a source may hand over"), func() {
+						choices := []struct {
+							label  string
+							height int
+						}{{"Auto", 0}, {"1080p", 1080}, {"720p", 720}, {"480p", 480}}
+						ui.Row(c).Gap(6).Children(func() {
+							for _, o := range choices {
+								o := o
+								chosen := a.settings.MaxHeight == o.height
+								b := ui.ButtonBase(c.Key("res" + o.label)).Height(26).PaddingX(10).Radius(999).Center().
+									FocusRing(false).Label(o.label)
+								if chosen {
+									b.Background(colors.accent).TextColor(colors.onAccent)
+								} else {
+									b.Background(colors.hover).TextColor(colors.text)
+								}
+								b.Children(func() {
+									ui.Text(c, o.label).FontSize(12).FontWeight(600)
+								})
+								if b.Clicked() && a.settings.MaxHeight != o.height {
+									a.settings.MaxHeight = o.height
+									a.settings.save()
+									for _, p := range a.plugins {
+										a.tellPluginChoices(p)
+									}
+								}
+							}
+						})
+					})
+					a.settingsRow(c, i18n.T("Subtitles"), i18n.T("Burn the source's subtitles into the picture"), func() {
+						on := a.settings.Subtitles
+						if ui.Switch(c.Key("subs"), &on).Changed() {
+							a.settings.Subtitles = on
+							a.settings.save()
+							for _, p := range a.plugins {
+								a.tellPluginChoices(p)
+							}
+						}
+					})
 					a.settingsRow(c, i18n.T("Default Speed"), i18n.T("Every episode opens at this speed"), func() {
 						rates := []float64{0.75, 1, 1.25, 1.5, 2}
 						ui.Row(c).Gap(6).Children(func() {

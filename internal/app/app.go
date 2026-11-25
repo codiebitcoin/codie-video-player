@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -342,6 +343,7 @@ func (a *app) makeSources(bundledPlugins embed.FS) {
 		if v := p.Video(); v != nil {
 			e := sourceEntry{id: v.Info().ID, name: v.Info().Name, src: v, plugin: p}
 			a.sources = append(a.sources, e)
+			a.tellPluginChoices(p)
 		}
 	}
 	// The dropdown reads: the local folders, then YouTube, then Bilibili,
@@ -371,6 +373,20 @@ func (a *app) makeSources(bundledPlugins embed.FS) {
 			a.sourceEntry = &a.sources[0]
 		}
 	}
+}
+
+// tellPluginChoices hands a plugin what the listener chose that the source
+// needs to know: how tall a picture to take, and whether subtitles play.
+func (a *app) tellPluginChoices(p *plugin.Plugin) {
+	if a.settings == nil {
+		return
+	}
+	p.SetSetting("maxHeight", strconv.Itoa(a.settings.MaxHeight))
+	subtitles := "0"
+	if a.settings.Subtitles {
+		subtitles = "1"
+	}
+	p.SetSetting("subtitles", subtitles)
 }
 
 // sourceDisabled reports whether a built-in source is turned off.
@@ -1241,6 +1257,13 @@ type settings struct {
 	// NoAutoNext stops the next episode from coming on its own when one
 	// ends.
 	NoAutoNext bool `json:"noAutoNext,omitempty"`
+	// MaxHeight is the tallest picture a source may hand over, 0 for the
+	// best it has: 1080, 720 and 480 are the choices.
+	MaxHeight int `json:"maxHeight,omitempty"`
+	// Subtitles burns the source's subtitles into the picture when it has
+	// some. The player has no track of its own, so it's the file that carries
+	// them.
+	Subtitles bool `json:"subtitles,omitempty"`
 	// ConversationControl lets the paired codie device's talk move the
 	// playback: what the viewer says to it ("next one", "play …") lands
 	// here as tool calls.
