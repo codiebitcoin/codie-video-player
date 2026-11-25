@@ -1336,6 +1336,9 @@ func loadSettings() *settings {
 		if !containsString(s.DisabledPlugins, "huangguo") {
 			s.DisabledPlugins = append(s.DisabledPlugins, "huangguo")
 		}
+		// 第一次跑:720p 够用了;对着设备说话就能控制这里的播放,默认开。
+		s.MaxHeight = 720
+		s.ConversationControl = true
 		s.SourcesChosen = true
 		s.save()
 	} else if containsString(s.DisabledSources, "huangguo") && !containsString(s.DisabledPlugins, "huangguo") {
