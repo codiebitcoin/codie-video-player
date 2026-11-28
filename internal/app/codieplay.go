@@ -281,6 +281,14 @@ func (a *app) codieStream(ctx context.Context, s *video.Stream, rate, resumeS, t
 		if made == 0 {
 			if !a.codieStartFirst(seg, gen, rate, from) {
 				removeCodieSegments([]codieSegment{seg})
+				// The stage keeps saying "Transcoding…" unless this says why
+				// it stopped: the session's own error is the reason.
+				a.post(func() {
+					if a.codieGen == gen && a.codieBusy != "" {
+						a.codieBusy = ""
+						a.playerErr = videoProblem(a.lastSessionErr, i18n.T("This episode won’t play"))
+					}
+				})
 				return
 			}
 		} else {
@@ -316,6 +324,11 @@ func (a *app) codieStartFirst(seg codieSegment, gen uint64, rate, madeToS float6
 	took := time.Since(t0)
 	log.Printf("codie play: first segment session=%q err=%v (upload %v)", session, err, took)
 	if err != nil {
+		a.post(func() {
+			if a.codieGen == gen {
+				a.lastSessionErr = err
+			}
+		})
 		return false
 	}
 	a.post(func() {

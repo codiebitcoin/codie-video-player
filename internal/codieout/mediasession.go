@@ -229,7 +229,10 @@ func mediaSessionID(raw []byte) (string, error) {
 			msg += "（原因: " + reason.Reason + "）"
 		}
 		if env.Code == "MEDIA_SESSION_BLOCKED" {
-			msg += "——把设备屏幕点亮、解锁、退到空闲画面再试"
+			msg += "——把设备屏幕点亮、解锁再试"
+			if reason.Reason == "main_ui_visible" {
+				msg += "；设备正停在自己的主页上，退出主页（比如切到角色页）再试"
+			}
 		}
 		return "", errors.New(msg)
 	}
