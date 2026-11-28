@@ -57,6 +57,8 @@ var zhCN = map[string]string{
 	"Forget Device":                                   "解除配对",
 	"Forward":                                         "前进",
 	"The codie device is out of reach; check that it's on and on this network": "连不上 codie 设备：请确认设备已开机并在同一网络",
+	"Sign in to this source for its higher resolutions": "登录该来源后才有更高分辨率",
+	"Rotate":                    "旋转",
 	"Fullscreen":                "全屏",
 	"Paired devices":            "已配对的设备",
 	"Online":                    "在线",

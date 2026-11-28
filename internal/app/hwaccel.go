@@ -50,3 +50,20 @@ func initHWAccel() {
 func ensureHWAccel() {
 	hwaccelOnce.Do(initHWAccel)
 }
+
+// sslCertFile is the system's certificate bundle, which the ffmpeg the app
+// ships asks for: its OpenSSL looks for a CA file where macOS keeps none,
+// and every site whose chain came from a newer authority then fails with
+// "certificate verify failed". Pointing SSL_CERT_FILE at the system's store
+// mends the asks. Windows keeps its own store in the system.
+var sslCertFile = map[string]string{
+	"darwin": "/etc/ssl/cert.pem",
+}
+
+// hwaccelEncoder is the hardware H.264 encoder's name, where the machine has
+// one: turning an episode with it runs about twice as fast as with libx264,
+// which keeps the segments of slow sources ahead of the watching. An empty
+// name keeps the software encoder.
+var hwaccelEncoder = map[string]string{
+	"darwin": "h264_videotoolbox",
+}

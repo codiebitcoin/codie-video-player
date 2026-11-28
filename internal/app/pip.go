@@ -26,39 +26,90 @@ func (a *app) openPip() {
 	if a.fullscreen {
 		a.setFullscreen(false)
 	}
+	if a.pipOpacity <= 0 {
+		a.pipOpacity = 1
+	}
 	w, h := 0, 0
 	x, y := 0, 0
 	if a.win != nil {
 		w, h = a.win.Size()
 		x, y = a.win.Position()
 	}
-	px, py := x+w-pipWidth-24, y+h-pipHeight()-24
+	px, py := x+w-pipWidth-24, y+h-24
 	if px < x {
 		px = x + 24
 	}
 	if py < y {
 		py = y + 24
 	}
+	if a.pipX != 0 || a.pipY != 0 {
+		px, py = a.pipX, a.pipY
+	}
+	pw, ph := a.pipSize()
 	a.pipWin = mygo.NewWindow(mygo.WindowOptions{
-		Title:           i18n.T("Codie Video — Mini"),
-		Width:           pipWidth,
-		Height:          pipHeight(),
-		X:               px,
-		Y:               py,
-		TitleBarStyle:      mygo.TitleBarHidden,
-		HideWindowButtons:  true, // the strip's own cross closes it
-		BackgroundColor:    "#000000",
-		Content:            ui.View(a.pipContent),
+		Title:             i18n.T("Codie Video — Mini"),
+		Width:             pw,
+		Height:            ph,
+		X:                 px,
+		Y:                 py,
+		Opacity:           a.pipOpacity,
+		TitleBarStyle:     mygo.TitleBarHidden,
+		HideWindowButtons: true, // the strip's own cross closes it
+		BackgroundColor:   "#000000",
+		Content:           ui.View(a.pipContent),
 	})
 	a.pipWin.SetAlwaysOnTop(true)
+	// Where the listener put it is where it stays, this run and the next.
+	a.pipWin.OnMove(func() {
+		if a.pipWin == nil {
+			return
+		}
+		mx, my := a.pipWin.Position()
+		a.post(func() { a.pipX, a.pipY = mx, my })
+	})
+	// The opacity slider's value goes to the window as it moves: a look that
+	// answers the hand, not one that waits for a rebuild.
+	go func() {
+		applied := a.pipOpacity
+		for a.pipWin != nil {
+			time.Sleep(120 * time.Millisecond)
+			if a.pipWin == nil || a.pipOpacity == applied {
+				continue
+			}
+			applied = a.pipOpacity
+			op := applied
+			a.post(func() {
+				if a.pipWin != nil {
+					a.pipWin.SetOpacity(op)
+				}
+			})
+		}
+	}()
 	a.pipWin.OnClose(func(*mygo.CloseEvent) {
 		a.post(func() { a.pipWin = nil })
 	})
 	a.win.Invalidate()
 }
 
-// pipHeight is the little window's height: a 16:9 picture and its strip.
-func pipHeight() int { return pipWidth * 9 / 16 + 44 }
+// pipSize is the little window's width and height: the width leads, at
+// pipWidth, and the height follows the video's own shape — a 16:9 episode
+// and a phone's upright recording each get their own. The strip rides below.
+func (a *app) pipSize() (int, int) {
+	w := pipWidth
+	h := w * 9 / 16
+	if p := a.player; p != nil && p.Ready() {
+		if vw, vh := p.Size(); vw > 0 && vh > 0 {
+			h = w * vh / vw
+		}
+	}
+	if h < 120 {
+		h = 120
+	}
+	if h > 720 {
+		h = 720
+	}
+	return w, h + 44
+}
 
 // closePip shuts the little window, back to the stage.
 func (a *app) closePip() {
@@ -101,6 +152,9 @@ func (a *app) pipContent(c *ui.Context) {
 				a.playPause()
 			}
 			ui.Text(c, a.playing.item.Title).FontSize(12.5).Grow(1).Shrink(1).MinWidth(0).SingleLine().TextColor(colors.muted)
+			// How see-through the window is, half to fully solid. The value
+			// goes to the window off the build, from the keep-alive below.
+			ui.Slider(c.Key("pip-op"), &a.pipOpacity, 0.5, 1).Width(64)
 			if b := iconButton(c.Key("pip-main"), iconRestore, 15, colors.muted, i18n.T("Back to Main Window")); b.Clicked() {
 				a.closePip()
 			}
@@ -114,12 +168,32 @@ func (a *app) pipContent(c *ui.Context) {
 // pipActive reports whether what plays is in the little window now.
 func (a *app) pipActive() bool { return a.pipWin != nil }
 
-// setFullscreen makes the window take the whole screen, or gives it back.
+// setFullscreen makes the picture take the whole screen, or gives it back.
+// On the device it is the session's layout: stretch over the codie's screen,
+// applied to the running session at once, its shape from here on. Here it is
+// this window over this screen.
 func (a *app) setFullscreen(on bool) {
-	if a.fullscreen == on || a.win == nil {
+	if a.fullscreen == on {
 		return
 	}
 	a.fullscreen = on
+	if a.deviceOutput && a.codie != nil {
+		// 设备端:立即把正在播的会话切到拉伸/原比例,之后的段照用。
+		if a.codieSession != "" {
+			codieMediaAction(a.codie, a.codieSession, "set_layout", map[string]any{"layout": a.codieLayout()})
+		}
+		a.wakeControls()
+		if a.win != nil {
+			a.win.Invalidate()
+		}
+		if a.deviceWin != nil {
+			a.deviceWin.Invalidate()
+		}
+		return
+	}
+	if a.win == nil {
+		return
+	}
 	a.win.SetFullScreen(on)
 	if on {
 		a.closePip()
@@ -131,6 +205,19 @@ func (a *app) setFullscreen(on bool) {
 
 // toggleFullscreen flips the window between the screen and its own size.
 func (a *app) toggleFullscreen() { a.setFullscreen(!a.fullscreen) }
+
+// rotateQuarter turns the local picture another quarter turn clockwise,
+// 0 → 90 → 180 → 270 → 0. It plays as it turns.
+func (a *app) rotateQuarter() {
+	a.rotation = (a.rotation + 90) % 360
+	a.wakeControls()
+	if a.win != nil {
+		a.win.Invalidate()
+	}
+	if a.pipWin != nil {
+		a.pipWin.Invalidate()
+	}
+}
 
 // playPause answers the play/pause of what plays here — or, when the
 // picture is on the device, of what plays there.

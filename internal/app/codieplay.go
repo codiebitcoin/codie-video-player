@@ -9,9 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"codie-video-player/internal/codieout"
@@ -52,9 +54,13 @@ var codieMediaAction = func(c *codieout.Client, session, action string, args map
 }
 
 // codieLayout is the rectangle the session takes on the device's screen: the
-// whole of it, the picture shown whole. The codie screen is its own screen.
+// whole of it, the picture stretched to fill it while the fullscreen ask is
+// on, and at its own shape otherwise — the width fills, the height follows.
 func (a *app) codieLayout() *codieout.MediaLayout {
-	return codieout.FullscreenLayout()
+	if a.fullscreen {
+		return codieout.FullscreenLayout()
+	}
+	return codieout.DefaultLayout()
 }
 
 // codieMaxHeight is the resolution the viewer chose, or 0 when they left it
@@ -195,6 +201,12 @@ func (a *app) codieStream(ctx context.Context, s *video.Stream, rate, resumeS, t
 	span := float64(codieSegmentSpanS)
 	made := 0
 	resolvedAt := time.Now()
+	var lastMadeAt time.Time
+	// howFast is the transcode's pace, content seconds per wall second,
+	// from the last segment made: under 1 means it can't keep up with the
+	// watching at all. It sizes the next span so the next segment is ready
+	// well before the current one plays out.
+	howFast := 0.0
 	for from < totalS {
 		if ctx.Err() != nil {
 			return // stopped: nothing more is made for it
@@ -251,15 +263,28 @@ func (a *app) codieStream(ctx context.Context, s *video.Stream, rate, resumeS, t
 			span = want / 2
 			continue
 		}
+		madeAt := time.Now()
 		size := fileSize(seg.path)
 		log.Printf("codie play: segment %d made (%.0fs+%.0fs, %d bytes)", made, from, want, size)
-		// 这一段每秒出了多少字节,下一段就按它定长:第一段够小,后面按 30MiB。
+		// 这一段做了多久、每秒出了多少字节,下一段就按它定长;转得慢的片源
+		// 下一段跟着缩短,保证它总在当前段播完前出来,播放不等人。
+		if made > 0 && want > 0 {
+			if took := madeAt.Sub(lastMadeAt).Seconds(); took > 0.2 {
+				howFast = want / took
+			}
+		}
+		lastMadeAt = madeAt
 		if size > 0 && want > 0 {
 			perSec := float64(size) / want
 			target := float64(codieSegmentBytes)
 			next := target / perSec
-			if next < 15 {
-				next = 15
+			// 转码追不上播放(常见于 AV1 高码率):下一段只做「当前段时长
+			// 的 0.8 倍」的内容,转它的耗时也就不到当前段的播放时长。
+			if made > 0 && howFast > 0 && howFast < 2.5 {
+				next = want * 0.8 * max(howFast/1.5, 0.5)
+			}
+			if next < 8 {
+				next = 8
 			}
 			if next > 300 {
 				next = 300
@@ -442,6 +467,55 @@ func (a *app) codieMakeSegment(ctx context.Context, s *video.Stream, rate, fromS
 // input it belongs to. A var so a test can say what was asked.
 var hwaccelDecode string
 
+// hwEncodeOK says the hardware encoder turned out usable; the first
+// transcode asks ffmpeg once with ten grey frames, and a pass that fails
+// flips it off, so the run encodes in software from then on.
+var (
+	hwMu       sync.Mutex
+	hwTested   bool
+	hwEncodeOK = true
+)
+
+// ensureHWEncode probes the hardware encoder once, beside the decode ask: a
+// two-second pass over ten grey frames says whether this ffmpeg + this
+// machine make H.264 with it.
+func ensureHWEncode() {
+	hwMu.Lock()
+	defer hwMu.Unlock()
+	if hwTested {
+		return
+	}
+	hwTested = true
+	name, ok := hwaccelEncoder[runtime.GOOS]
+	if !ok || name == "" {
+		hwEncodeOK = false
+		return
+	}
+	ffmpeg := findFFmpeg()
+	if ffmpeg == "" {
+		hwEncodeOK = false
+		return
+	}
+	out, err := os.CreateTemp("", "codie-hwprobe-*.mp4")
+	if err != nil {
+		hwEncodeOK = false
+		return
+	}
+	outPath := out.Name()
+	out.Close()
+	defer os.Remove(outPath)
+	cmd := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+		"-f", "lavfi", "-i", "color=c=gray:s=320x240:d=0.4:r=25",
+		"-c:v", name, "-frames:v", "10", "-f", "mp4", outPath)
+	hideWindow(cmd)
+	if err := cmd.Run(); err != nil {
+		log.Printf("codie: hardware encoder %s didn't work (%v); using libx264", name, err)
+		hwEncodeOK = false
+	} else {
+		log.Printf("codie: hardware encoder %s works; encoding on it", name)
+	}
+}
+
 // codieSegmentArgs is ffmpeg's arguments for one segment: the window asked
 // for, in the device's shape at the resolution the viewer chose, at the pace
 // asked for.
@@ -473,19 +547,44 @@ func codieSegmentArgs(s *video.Stream, rate, fromS, spanS float64, sub, dst stri
 	}
 	w, h := codieTargetSize(maxHeight)
 	shape := codieShape(sub, w, h)
+	sound := probeAudioCopy(s, rate)
+	args = append(args, videoCodecArgs(nil, nil)...)
 	if rate != 1 {
-		args = append(args,
-			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-			"-vf", fmt.Sprintf("setpts=PTS/%g,", rate)+shape,
-			"-c:a", "aac", "-b:a", "160k",
-			"-af", fmt.Sprintf("atempo=%g", rate))
+		args = append(args, "-vf", fmt.Sprintf("setpts=PTS/%g,", rate)+shape)
+		args = append(args, sound...)
+		if s.AudioURL == "" {
+			args = append(args, "-af", fmt.Sprintf("atempo=%g", rate))
+		}
 	} else {
-		args = append(args,
-			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-			"-vf", shape,
-			"-c:a", "aac", "-b:a", "160k")
+		args = append(args, "-vf", shape)
+		args = append(args, sound...)
 	}
 	return append(args, "-movflags", "+faststart", dst)
+}
+
+// probeAudioCopy says the sound rides along untouched: AAC in, AAC out, no
+// decode and no re-encode — but never at a changed pace, for atempo remakes
+// the sound.
+func probeAudioCopy(s *video.Stream, rate float64) []string {
+	if rate != 1 {
+		return []string{"-c:a", "aac", "-b:a", "160k"}
+	}
+	if ffprobe := findFFprobe(); ffprobe != "" {
+		videoArgs := []string{"-v", "error"}
+		audioProbeURL := s.URL
+		if s.AudioURL != "" {
+			audioProbeURL = s.AudioURL
+		}
+		if streamOptions(audioProbeURL) != nil {
+			if hdr := ffmpegHeaders(s.Headers); hdr != "" {
+				videoArgs = append(videoArgs, "-headers", hdr)
+			}
+		}
+		if probeAudioAAC(context.Background(), ffprobe, audioProbeURL, videoArgs) {
+			return []string{"-c:a", "copy"}
+		}
+	}
+	return []string{"-c:a", "aac", "-b:a", "160k"}
 }
 
 // codieProbeSeconds is how long the episode is, from what the source said, or
@@ -846,12 +945,28 @@ func (a *app) codieMakeMP4To(parent context.Context, s *video.Stream, rate float
 		return errors.New(i18n.T("The device needs ffmpeg to take episodes; install it with your package manager and try again"))
 	}
 	asIs := rate == 1 && probePlayableAsIs(parent, s, s.Headers)
+	audioCopy := false
 	if asIs {
 		log.Printf("codie play: streams already in device shape; copying")
 	} else {
-		log.Printf("codie play: streams need transcoding (rate %g)", rate)
+		// 画面要重编;音轨是 AAC 就原样拷,不解码——音画一体的源探它自己,
+		// 分开的源探那条音轨的地址。
+		if ffprobe := findFFprobe(); ffprobe != "" && rate == 1 {
+			videoArgs := []string{"-v", "error"}
+			audioProbeURL := s.URL
+			if s.AudioURL != "" {
+				audioProbeURL = s.AudioURL
+			}
+			if streamOptions(audioProbeURL) != nil {
+				if hdr := ffmpegHeaders(s.Headers); hdr != "" {
+					videoArgs = append(videoArgs, "-headers", hdr)
+				}
+			}
+			audioCopy = probeAudioAAC(parent, ffprobe, audioProbeURL, videoArgs)
+		}
+		log.Printf("codie play: streams need transcoding (rate %g, audio copy %v)", rate, audioCopy)
 	}
-	args := codieFFmpegArgs(s, rate, asIs, dst, a.codieMaxHeight())
+	args := codieFFmpegArgs(s, rate, asIs, dst, a.codieMaxHeight(), audioCopy)
 	ctx, cancel := context.WithTimeout(parent, codieFFmpegTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffmpeg, args...)
@@ -911,13 +1026,34 @@ readLoop:
 	return nil
 }
 
+// videoCodecArgs is the picture's encoder: the machine's own where it has
+// one (twice as fast as libx264, which keeps slow sources' segments ahead of
+// the watching), libx264 otherwise. hwFallback, when set, makes the args a
+// mark for the caller to retry with libx264 if the hardware encoder turned
+// the pass down.
+func videoCodecArgs(extra []string, hwFallback *bool) []string {
+	ensureHWEncode()
+	hwMu.Lock()
+	okHW := hwEncodeOK
+	hwMu.Unlock()
+	name, ok := hwaccelEncoder[runtime.GOOS]
+	if !ok || name == "" || !okHW {
+		return append([]string{"-c:v", "libx264", "-preset", "veryfast", "-crf", "23"}, extra...)
+	}
+	if hwFallback != nil {
+		*hwFallback = true
+	}
+	return []string{"-c:v", name, "-b:v", "6M"}
+}
+
 // codieFFmpegArgs is what ffmpeg gets for an episode: the inputs (the
 // source's headers on each, two when picture and sound come apart), the
 // maps, and the device's shape. rate bakes the pace in — setpts for the
 // picture, atempo for the sound, whose range covers the whole rate menu in
 // one go. asIs says the stream already plays as the device takes it, which
-// only ever goes with the usual speed.
-func codieFFmpegArgs(s *video.Stream, rate float64, asIs bool, dst string, maxHeight int) []string {
+// only ever goes with the usual speed. audioCopy says the sound is already
+// AAC: it rides along untouched while only the picture is made anew.
+func codieFFmpegArgs(s *video.Stream, rate float64, asIs bool, dst string, maxHeight int, audioCopy bool) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}
 	hdr := ffmpegHeaders(s.Headers)
 	input := func(url string) {
@@ -940,20 +1076,27 @@ func codieFFmpegArgs(s *video.Stream, rate float64, asIs bool, dst string, maxHe
 		args = append(args, "-map", "0:v:0?", "-map", "0:a:0?")
 	}
 	w, h := codieTargetSize(maxHeight)
+	// AAC 音轨原样带走:不解码、无损、省一时间。变速和分开的音轨除外。
+	soundCopy := audioCopy && rate == 1
+	sound := []string{"-c:a", "aac", "-b:a", "160k"}
+	if soundCopy {
+		sound = []string{"-c:a", "copy"}
+	}
 	switch {
 	case rate != 1:
+		args = append(args, videoCodecArgs(nil, nil)...)
 		args = append(args,
-			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-			"-vf", fmt.Sprintf("setpts=PTS/%g,%s", rate, codieShape("", w, h)),
-			"-c:a", "aac", "-b:a", "160k",
-			"-af", fmt.Sprintf("atempo=%g", rate))
+			"-vf", fmt.Sprintf("setpts=PTS/%g,%s", rate, codieShape("", w, h)))
+		args = append(args, sound...)
+		if s.AudioURL == "" {
+			args = append(args, "-af", fmt.Sprintf("atempo=%g", rate))
+		}
 	case asIs:
 		args = append(args, "-c", "copy")
 	default:
-		args = append(args,
-			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-			"-vf", codieShape("", w, h),
-			"-c:a", "aac", "-b:a", "160k")
+		args = append(args, videoCodecArgs(nil, nil)...)
+		args = append(args, "-vf", codieShape("", w, h))
+		args = append(args, sound...)
 	}
 	return append(args, "-movflags", "+faststart", "-progress", "pipe:1", dst)
 }
@@ -1099,27 +1242,33 @@ func probePlayableAsIs(parent context.Context, s *video.Stream, headers map[stri
 		return false
 	}
 	// 声音:要 AAC。画面和声音分开的源才有这一问。
-	if s.AudioURL != "" {
-		aargs := append(videoArgs, "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "json")
-		actx, acancel := context.WithTimeout(parent, probeTimeout)
-		defer acancel()
-		aprobe := exec.CommandContext(actx, ffprobe, append(aargs, s.AudioURL)...)
-		hideWindow(aprobe)
-		aprobe.Env = proxyEnv()
-		aout, err := aprobe.Output()
-		if err != nil {
-			log.Printf("codie probe-as-is: audio ffprobe failed: %v", err)
-			return false
-		}
-		var a struct {
-			Streams []struct {
-				CodecName string `json:"codec_name"`
-			} `json:"streams"`
-		}
-		if json.Unmarshal(aout, &a) != nil || len(a.Streams) == 0 || a.Streams[0].CodecName != "aac" {
-			log.Printf("codie probe-as-is: audio isn't aac")
-			return false
-		}
+	if s.AudioURL != "" && !probeAudioAAC(parent, ffprobe, s.AudioURL, videoArgs) {
+		return false
+	}
+	return true
+}
+
+// probeAudioAAC asks ffprobe whether the audio at url is AAC. 音轨是 AAC 的
+// 话,转码场景里它原样拷(-c:a copy),不解码不重编。
+func probeAudioAAC(parent context.Context, ffprobe, url string, baseArgs []string) bool {
+	aargs := append(baseArgs, "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "json")
+	actx, acancel := context.WithTimeout(parent, probeTimeout)
+	defer acancel()
+	aprobe := exec.CommandContext(actx, ffprobe, append(aargs, url)...)
+	hideWindow(aprobe)
+	aprobe.Env = proxyEnv()
+	aout, err := aprobe.Output()
+	if err != nil {
+		log.Printf("codie probe audio: ffprobe failed: %v", err)
+		return false
+	}
+	var a struct {
+		Streams []struct {
+			CodecName string `json:"codec_name"`
+		} `json:"streams"`
+	}
+	if json.Unmarshal(aout, &a) != nil || len(a.Streams) == 0 || a.Streams[0].CodecName != "aac" {
+		return false
 	}
 	return true
 }
@@ -1472,6 +1621,39 @@ func (a *app) codieSwitchSegment(gen uint64, segIdx int, innerStartMS int64) {
 // codieRespeed plays the episode on the device again at the rate it moved
 // to: the file is made anew, for a stream that copies can't change its
 // pace, and the session picks up where the story was.
+// restartCodieAtCurrentPosition remakes the episode on the device from where
+// it plays now, at the resolution just chosen: the picture follows the pick
+// without the listener finding the episode again.
+func (a *app) restartCodieAtCurrentPosition() {
+	if !a.deviceOutput || a.codie == nil || a.playing.item.ID == "" {
+		return
+	}
+	pos, _ := a.codieTimes()
+	contentS := pos.Seconds()
+	item, ep, at := a.playing.item, a.playing.ep, a.playing.at
+	a.stopPlayerForCodie()
+	go func() {
+		src := a.sourceOf(item.Source)
+		if src == nil {
+			src = a.sourceEntry
+		}
+		if src == nil {
+			return
+		}
+		s, err := src.src.Play(item.ID, ep.ID)
+		if err != nil {
+			a.post(func() {
+				a.codieBusy = ""
+				a.playerErr = videoProblem(err, i18n.T("This episode won’t play"))
+			})
+			return
+		}
+		a.playEpisodeOnDevice(item, ep, at, s, contentS, func() (*video.Stream, error) {
+			return src.src.Play(item.ID, ep.ID)
+		})
+	}()
+}
+
 func (a *app) codieRespeed(oldRate, newRate float64) {
 	item, ep, at := a.playing.item, a.playing.ep, a.playing.at
 	if item.ID == "" || a.codie == nil {

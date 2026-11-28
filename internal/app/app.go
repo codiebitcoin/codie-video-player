@@ -172,6 +172,14 @@ type app struct {
 	// feedMode is on while a feed plays: one item after another with no
 	// countdown between them, which is the point of a feed.
 	feedMode bool
+	// rotation is how the local picture is turned, in degrees: 0, 90, 180
+	// or 270. The device plays as its own screen holds it; this is only for
+	// what plays here.
+	rotation int
+	// pipOpacity is how see-through the mini window is, 1 fully solid. Its
+	// position rides with the window; both carry from run to run.
+	pipOpacity float64
+	pipX, pipY int
 	// feedAutostart says a feed tab was just opened: its first page starts
 	// playing as soon as it's here.
 	feedAutostart bool

@@ -1531,7 +1531,14 @@ export async function videoPlay({ id, episode }) {
     // 默认 720p 够了:下载快、传得动。监听者在设置里选了别的就按那个来。
     const want = cap > 0 ? cap : 720;
     const mid = ok.filter((x) => (x.height || 1080) <= want);
-    return pick(mid.length ? mid : ok);
+    const pool = mid.length ? mid : ok;
+    // 未登录 B 站只给到 480p:想要的高了拿不到,说清楚为什么,别让界面
+    // 像是坏了。登录后同样的选择就是真 720p/1080p。
+    const top = pool[0] || {};
+    if ((top.height || 0) < want && !signedIn()) {
+      console.warn(`bilibili: 未登录只给 ${top.height}p;要 ${want}p 请登录后重播`);
+    }
+    return pick(pool);
   };
   const pick = (pool) => pool.sort((a, b) => b.bandwidth - a.bandwidth)[0];
   // As audioOf keeps its mirrors: one address to a host, the upos ones first,

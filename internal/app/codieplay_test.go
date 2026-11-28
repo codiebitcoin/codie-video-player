@@ -21,22 +21,22 @@ func TestCodieFFmpegArgs(t *testing.T) {
 	// The usual speed of a stream already in the device's shape is a plain
 	// copy; any other pace bakes itself in, which no copy can do.
 	s := &video.Stream{URL: "http://x/v.mp4", Type: "mp4"}
-	if got := codieFFmpegArgs(s, 1, true, "out.mp4", 0); !hasPair(got, "-c", "copy") {
+	if got := codieFFmpegArgs(s, 1, true, "out.mp4", 0, false); !hasPair(got, "-c", "copy") {
 		t.Errorf("as-is at 1× = %v, want a copy", got)
 	}
-	if got := codieFFmpegArgs(s, 1.5, false, "out.mp4", 0); hasPair(got, "-c", "copy") {
+	if got := codieFFmpegArgs(s, 1.5, false, "out.mp4", 0, false); hasPair(got, "-c", "copy") {
 		t.Errorf("1.5× = %v, a copy can't change its pace", got)
 	} else if !hasPair(got, "-vf", "setpts=PTS/1.5,scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2") {
 		t.Errorf("1.5× = %v, the picture isn't sped", got)
 	} else if !hasPair(got, "-af", "atempo=1.5") {
 		t.Errorf("1.5× = %v, the sound isn't sped", got)
 	}
-	if got := codieFFmpegArgs(s, 1, false, "out.mp4", 0); hasStr(got, "setpts") || hasStr(got, "atempo") {
+	if got := codieFFmpegArgs(s, 1, false, "out.mp4", 0, false); hasStr(got, "setpts") || hasStr(got, "atempo") {
 		t.Errorf("1× transcode = %v, nothing should be sped", got)
 	}
 	// A stream with its sound apart maps the two inputs together.
 	s2 := &video.Stream{URL: "http://x/v.m3u8", AudioURL: "http://x/a.mp3", Type: "hls"}
-	got := codieFFmpegArgs(s2, 1, false, "out.mp4", 0)
+	got := codieFFmpegArgs(s2, 1, false, "out.mp4", 0, false)
 	if !hasPair(got, "-map", "0:v:0") || !hasPair(got, "-map", "1:a:0?") {
 		t.Errorf("apart streams = %v, want both inputs mapped", got)
 	}
@@ -690,20 +690,28 @@ func TestCodieArgsFollowResolution(t *testing.T) {
 		{480, "scale=852:480:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2"},
 		{0, "scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2"},
 	} {
-		got := codieFFmpegArgs(s, 1, false, "out.mp4", tt.maxHeight)
+		got := codieFFmpegArgs(s, 1, false, "out.mp4", tt.maxHeight, false)
 		if !hasPair(got, "-vf", tt.scale) {
 			t.Errorf("maxHeight %d = %v, want -vf %s", tt.maxHeight, got, tt.scale)
 		}
 	}
 }
 
-// The device's session is always the whole screen with the picture shown
-// whole: the codie screen is its own screen, not a window to arrange.
-func TestCodieLayoutIsFullscreen(t *testing.T) {
+// The device's session is the whole screen: at its own shape by default
+// (the width fills, the height follows the video), stretched to fill when
+// the fullscreen ask is on.
+func TestCodieLayoutFollowsFullscreen(t *testing.T) {
 	a := &app{}
-	l := a.codieLayout()
-	if l.Fit != "contain" || l.WidthPercent != 100 || l.HeightPercent != 100 {
-		t.Errorf("layout = %+v, want a full-screen contain", l)
+	if l := a.codieLayout(); l.Fit != "contain" || l.WidthPercent != 100 || l.HeightPercent != 100 {
+		t.Errorf("default layout = %+v, want a full-screen contain", l)
+	}
+	a.fullscreen = true
+	if l := a.codieLayout(); l.Fit != "stretch" || l.WidthPercent != 100 || l.HeightPercent != 100 {
+		t.Errorf("fullscreen layout = %+v, want a full-screen stretch", l)
+	}
+	a.fullscreen = false
+	if l := a.codieLayout(); l.Fit != "contain" {
+		t.Errorf("back layout = %+v, want contain again", l)
 	}
 }
 

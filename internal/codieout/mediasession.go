@@ -32,9 +32,18 @@ type MediaLayout struct {
 	Fit           string  `json:"fit"` // contain, cover or stretch
 }
 
-// FullscreenLayout is the whole screen, the picture contained in it.
-func FullscreenLayout() *MediaLayout {
+// DefaultLayout is the whole screen, the picture shown at its own shape:
+// the width fills the screen, the height follows the video. Nothing cropped,
+// nothing stretched.
+func DefaultLayout() *MediaLayout {
 	return &MediaLayout{WidthPercent: 100, HeightPercent: 100, Fit: "contain"}
+}
+
+// FullscreenLayout is the whole screen, the picture stretched to fill it:
+// a fullscreen ask is the viewer's, and the screen's own shape is what the
+// picture takes. Nothing of the screen stays idle.
+func FullscreenLayout() *MediaLayout {
+	return &MediaLayout{WidthPercent: 100, HeightPercent: 100, Fit: "stretch"}
 }
 
 // MediaPlayback is how a session starts playing.

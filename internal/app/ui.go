@@ -69,6 +69,11 @@ func (a *app) view(c *ui.Context) {
 			a.toggleFullscreen()
 		}
 	})
+	root.OnShortcut(0, ui.KeyR, func() {
+		if a.page == pagePlay && !a.deviceOutput {
+			a.rotateQuarter()
+		}
+	})
 	root.OnShortcut(ui.Cmd, ui.KeyF, func() {
 		if a.page != pagePlay {
 			a.searchBox.Focus(c)
@@ -1570,6 +1575,9 @@ func (a *app) stageContent(c *ui.Context, playing playing) {
 					if d := a.detail; d != nil && len(d.Episodes) > 0 {
 						ui.Text(c, i18n.Tf("Ep %d of %d", playing.at+1, len(d.Episodes))).FontSize(12).TextColor(ui.RGBA(255, 255, 255, 0.45))
 					}
+					// The resolution, right here: what the device's episode
+					// is made at, changeable without a trip to Settings.
+					a.codieResolutionRow(c)
 				})
 			})
 			switch {
@@ -1607,7 +1615,13 @@ func (a *app) stageContent(c *ui.Context, playing playing) {
 		player := a.player
 		switch {
 		case player != nil:
-			ui.Video(c, player).Fill().Fit(ui.Contain)
+			v := ui.Video(c, player).Fill().Fit(ui.Contain)
+			if a.rotation != 0 {
+				// The quarter turns keep the picture in the stage; the box
+				// is the stage's own, so a turned 16:9 picture shows whole.
+				v = v.Transform(ui.Rotation(float32(a.rotation))).TransformOrigin(0.5, 0.5)
+			}
+			_ = v
 			if player.Ready() && player.Buffering() {
 				ui.Row(c).Absolute().Top(12).Right(14).Children(func() {
 					ui.Spinner(c).Size(16, 16).TextColor(ui.RGBA(255, 255, 255, 0.6))
@@ -2097,7 +2111,15 @@ func (a *app) controlsBody(c *ui.Context, playing playing) {
 				a.openPip()
 			}
 		}
-		// Fullscreen: the whole screen is the picture.
+		// Rotate the local picture a quarter turn; a sideways or upside
+		// down recording stands straight again.
+		if !a.deviceOutput && a.player != nil {
+			if b := iconButton(c.Key("rot"), iconRotate, 15, ui.RGB(255, 255, 255), i18n.T("Rotate")); b.Clicked() {
+				a.rotateQuarter()
+			}
+		}
+		// Fullscreen: on the device it stretches the session over the
+		// device's screen, here it takes this window over this screen.
 		fs := iconMaximize
 		if a.fullscreen {
 			fs = iconRestore
@@ -2396,6 +2418,48 @@ func (a *app) codiePlayedOf() string {
 		return ""
 	}
 	return clock(pos) + " / " + clock(dur)
+}
+
+// codieResolutionRow is the picture's tallest height the device's episode is
+// made at, the same choice Settings carries, right on the now-playing card:
+// picking one remakes the episode at it.
+func (a *app) codieResolutionRow(c *ui.Context) {
+	choices := []struct {
+		label  string
+		height int
+	}{{"Auto", 0}, {"1080p", 1080}, {"720p", 720}, {"480p", 480}}
+	ui.Column(c).Gap(4).Children(func() {
+		ui.Row(c).Gap(6).Children(func() {
+			for _, o := range choices {
+				o := o
+				chosen := a.settings.MaxHeight == o.height
+				b := ui.ButtonBase(c.Key("cres" + o.label)).Height(24).PaddingX(10).Radius(999).Center().
+					FocusRing(false).Label(o.label)
+				if chosen {
+					b.Background(colors.accent).TextColor(colors.onAccent)
+				} else {
+					b.Background(ui.RGBA(255, 255, 255, 0.1)).TextColor(ui.RGB(255, 255, 255))
+				}
+				b.Children(func() {
+					ui.Text(c, o.label).FontSize(11.5).FontWeight(600)
+				})
+				if b.Clicked() && a.settings.MaxHeight != o.height {
+					a.settings.MaxHeight = o.height
+					a.settings.save()
+					for _, p := range a.plugins {
+						a.tellPluginChoices(p)
+					}
+					// The episode on the device is made at the old height; start
+					// it over at the new one, from where it is now.
+					a.restartCodieAtCurrentPosition()
+				}
+			}
+		})
+		// B 站未登录只给到 480p:登录后高分辨率才真的拿得到。
+		if a.srcAcct == nil && a.sourceEntry != nil && a.sourceEntry.plugin != nil && a.sourceEntry.plugin.Can("signIn") {
+			ui.Text(c, i18n.T("Sign in to this source for its higher resolutions")).FontSize(11).TextColor(ui.RGBA(255, 255, 255, 0.45))
+		}
+	})
 }
 
 // codieVolumeControl is how loud the device plays.

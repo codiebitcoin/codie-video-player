@@ -57,6 +57,8 @@ var jaJP = map[string]string{
 	"Forget Device":                                   "ペアリングを解除",
 	"Forward":                                         "進む",
 	"The codie device is out of reach; check that it's on and on this network": "codie デバイスに接続できません。電源とネットワークを確認してください",
+	"Sign in to this source for its higher resolutions": "高解像度にはログインが必要です",
+	"Rotate":                    "回転",
 	"Fullscreen":                "全画面",
 	"Paired devices":            "ペアリング済みデバイス",
 	"Online":                    "オンライン",

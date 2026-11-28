@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,11 @@ var proxyTransport = func() http.RoundTripper {
 // after the inherited ones so ours win. nil inherits everything as it is.
 func proxyEnv() []string {
 	env := proxy.EnvVars()
+	if path, ok := sslCertFile[runtime.GOOS]; ok {
+		if _, err := os.Stat(path); err == nil {
+			env = append(env, "SSL_CERT_FILE="+path)
+		}
+	}
 	if len(env) == 0 {
 		return nil
 	}
