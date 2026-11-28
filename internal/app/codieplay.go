@@ -388,8 +388,8 @@ func codieSegmentArgs(s *video.Stream, rate, fromS, spanS float64, sub, dst stri
 		if fromS > 0 {
 			args = append(args, "-ss", strconv.FormatFloat(fromS, 'f', 3, 64))
 		}
-		args = append(args, "-reconnect", "1", "-reconnect_streamed", "1",
-			"-reconnect_delay_max", "5", "-rw_timeout", "15000000", "-i", url)
+		args = append(args, streamOptions(url)...)
+		args = append(args, "-i", url)
 	}
 	input(s.URL)
 	if s.AudioURL != "" {
@@ -431,8 +431,11 @@ func (a *app) codieProbeSeconds(s *video.Stream, ep video.Episode) float64 {
 		return 0
 	}
 	args := []string{"-v", "error"}
-	if hdr := ffmpegHeaders(s.Headers); hdr != "" {
-		args = append(args, "-headers", hdr)
+	// The headers are an HTTP-protocol option; a local file takes none.
+	if streamOptions(s.URL) != nil {
+		if hdr := ffmpegHeaders(s.Headers); hdr != "" {
+			args = append(args, "-headers", hdr)
+		}
 	}
 	args = append(args, "-show_entries", "format=duration", "-of", "json", s.URL)
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
@@ -852,9 +855,9 @@ func codieFFmpegArgs(s *video.Stream, rate float64, asIs bool, dst string) []str
 		if hdr != "" {
 			args = append(args, "-headers", hdr)
 		}
-		// A CDN read that stalls would hang the whole pass otherwise.
-		args = append(args, "-reconnect", "1", "-reconnect_streamed", "1",
-			"-reconnect_delay_max", "5", "-rw_timeout", "15000000")
+		// A CDN read that stalls would hang the whole pass otherwise; a file
+		// on this machine takes none of these.
+		args = append(args, streamOptions(url)...)
 		args = append(args, "-i", url)
 	}
 	input(s.URL)
@@ -988,8 +991,10 @@ func probePlayableAsIs(parent context.Context, s *video.Stream, headers map[stri
 		return false // 不知道,就当要转
 	}
 	videoArgs := []string{"-v", "error"}
-	if hdr := ffmpegHeaders(headers); hdr != "" {
-		videoArgs = append(videoArgs, "-headers", hdr)
+	if streamOptions(s.URL) != nil {
+		if hdr := ffmpegHeaders(headers); hdr != "" {
+			videoArgs = append(videoArgs, "-headers", hdr)
+		}
 	}
 	// 画面:要 H.264,不大于 1080p。
 	vargs := append(videoArgs, "-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height", "-of", "json")

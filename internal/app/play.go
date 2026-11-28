@@ -162,9 +162,8 @@ func streamFFmpegArgs(s *video.Stream, sub string, startS float64) []string {
 		if startS > 1 {
 			args = append(args, "-ss", strconv.FormatFloat(startS, 'f', 3, 64))
 		}
-		args = append(args, "-reconnect", "1", "-reconnect_streamed", "1",
-			"-reconnect_delay_max", "5", "-rw_timeout", "15000000",
-			"-i", url)
+		args = append(args, streamOptions(url)...)
+		args = append(args, "-i", url)
 	}
 	input(s.URL)
 	if s.AudioURL != "" {
@@ -313,6 +312,18 @@ func serveStream(b *streamBuf) (*http.Server, string, error) {
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(ln)
 	return srv, "http://" + ln.Addr().String() + "/s.mp4", nil
+}
+
+// streamOptions are the input options that keep a network read alive: a CDN
+// that stalls is reconnected instead of hanging the pass. They are options of
+// the HTTP protocol, and a file on this machine takes none of them — ffmpeg
+// turns down its input with "Option not found" instead.
+func streamOptions(address string) []string {
+	if !strings.HasPrefix(address, "http://") && !strings.HasPrefix(address, "https://") {
+		return nil
+	}
+	return []string{"-reconnect", "1", "-reconnect_streamed", "1",
+		"-reconnect_delay_max", "5", "-rw_timeout", "15000000"}
 }
 
 // ffmpegHeaders is headers as ffmpeg's -headers takes them: one line to each,
