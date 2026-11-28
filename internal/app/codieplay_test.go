@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -703,5 +704,51 @@ func TestCodieLayoutIsFullscreen(t *testing.T) {
 	l := a.codieLayout()
 	if l.Fit != "contain" || l.WidthPercent != 100 || l.HeightPercent != 100 {
 		t.Errorf("layout = %+v, want a full-screen contain", l)
+	}
+}
+
+// The device turning the first segment's session away must not leave the
+// stage saying "Transcoding…" forever: the busy line goes, and the device's
+// own reason takes its place.
+func TestCodieStreamSurfacesSessionRefusal(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "ffmpeg")
+	script := "#!/bin/sh\n# a tiny valid mp4-shaped answer: the maker only stats the file\nhead -c 65536 /dev/zero > \"$0.out\"\nexit 0\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// codieMakeSegment stats dst (its own temp file) and probes its duration;
+	// a file of zeros has no moov, but the probe failing only logs. The
+	// session open below fails regardless.
+	oldFF := findFFmpegFn
+	findFFmpegFn = func() string { return fake }
+	defer func() { findFFmpegFn = oldFF }()
+
+	a := &app{}
+	a.settings = &settings{}
+	a.codieBusy = "Transcoding for the device…"
+	gen := a.codieGen
+
+	saved := codieOpenSessionFn
+	codieOpenSessionFn = func(*codieout.Client, string, codieout.MediaSessionRequest) (string, error) {
+		return "", errors.New("codie: MEDIA_SESSION_BLOCKED: The required output is unavailable. (HTTP 409)——把设备屏幕点亮、解锁再试")
+	}
+	defer func() { codieOpenSessionFn = saved }()
+
+	done := make(chan struct{})
+	go func() {
+		a.codieStream(context.Background(), &video.Stream{URL: "/tmp/x.mp4"}, 1, 0, 60, gen, nil)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("codieStream never came back after the refusal")
+	}
+	if a.codieBusy != "" {
+		t.Errorf("busy = %q, want it cleared", a.codieBusy)
+	}
+	if a.playerErr == "" || !strings.Contains(a.playerErr, "MEDIA_SESSION_BLOCKED") {
+		t.Errorf("playerErr = %q, want the device's own reason", a.playerErr)
 	}
 }

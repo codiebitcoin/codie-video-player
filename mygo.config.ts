@@ -4,7 +4,7 @@ export default ({ command }: { command: string }) => ({
   name: "Codie Video Player",
   identifier: "com.codie.videoplayer",
   slug: "codie-video-player",
-  version: "0.1.47",
+  version: "0.1.48",
   out: "build",
   urlSchemes: [command === "dev" ? "codie-video-player-dev" : "codie-video-player"],
   macos: {

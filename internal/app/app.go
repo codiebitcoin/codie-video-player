@@ -169,9 +169,6 @@ type app struct {
 	// codieMore says later segments are still being made: the last one on the
 	// screen mustn't count the next episode in while they are.
 	codieMore bool
-	// lastSessionErr is why the device turned the first segment's session
-	// away, for the stage to say instead of going on about transcoding.
-	lastSessionErr error
 	// feedMode is on while a feed plays: one item after another with no
 	// countdown between them, which is the point of a feed.
 	feedMode bool
