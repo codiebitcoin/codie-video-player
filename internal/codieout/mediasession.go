@@ -177,6 +177,14 @@ func (c *Client) MediaAction(sessionID, action string, extra map[string]any) err
 	return err
 }
 
+// SetMediaLayout moves a running session about the screen, or reshapes how
+// the picture sits in its rectangle: fit is contain, cover or stretch. The
+// device takes this live; the next session starts with whatever layout the
+// request names.
+func (c *Client) SetMediaLayout(sessionID string, layout *MediaLayout) error {
+	return c.MediaAction(sessionID, "set_layout", map[string]any{"layout": layout})
+}
+
 // MediaSessionState asks the device what a session is doing now.
 func (c *Client) MediaSessionState(sessionID string) (*MediaSessionState, error) {
 	raw, err := c.Call("GET", apiMedia+"/sessions/"+sessionID, nil, payloadEmpty, "")

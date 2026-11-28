@@ -166,6 +166,10 @@ type app struct {
 	// smoothed across sessions in milliseconds: the seam starts one margin
 	// earlier than it, so the swap lands as the old segment runs out.
 	codieUploadEMA float64
+	// deviceFit is how the picture sits in the device's screen: contain
+	// shows it whole, cover fills the screen and crops the sides. Sessions
+	// start with it, and a running one is moved with set_layout.
+	deviceFit string
 	// codieMore says later segments are still being made: the last one on the
 	// screen mustn't count the next episode in while they are.
 	codieMore bool

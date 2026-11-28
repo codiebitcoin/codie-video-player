@@ -51,6 +51,65 @@ var codieMediaAction = func(c *codieout.Client, session, action string, args map
 	go c.MediaAction(session, action, args)
 }
 
+// codieLayout is the rectangle the session takes on the device's screen: the
+// whole of it, with the picture either shown whole (contain) or filling it
+// with the sides cropped (cover), as the viewer's fit says.
+func (a *app) codieLayout() *codieout.MediaLayout {
+	l := codieout.FullscreenLayout()
+	if a.deviceFit == "cover" {
+		l.Fit = "cover"
+	}
+	return l
+}
+
+// codieSetFit says how the picture sits in the device's screen, and moves a
+// running session over at once; the sessions after it start the same way.
+func (a *app) codieSetFit(fit string) {
+	if fit != "contain" && fit != "cover" {
+		return
+	}
+	a.deviceFit = fit
+	if a.codie != nil && a.codieSession != "" {
+		codieMediaAction(a.codie, a.codieSession, "set_layout", map[string]any{"layout": a.codieLayout()})
+	}
+	a.wakeControls()
+	if a.win != nil {
+		a.win.Invalidate()
+	}
+}
+
+// codieMaxHeight is the resolution the viewer chose, or 0 when they left it
+// to the device (or when there are no settings, as in a test).
+func (a *app) codieMaxHeight() int {
+	if a.settings == nil {
+		return 0
+	}
+	return a.settings.MaxHeight
+}
+
+// codieTargetSize is the picture the device's episode is made at, from the
+// viewer's resolution choice: its height, never past the 1080p the device
+// takes, at 16:9. An empty choice is the device's own cap.
+func codieTargetSize(maxHeight int) (int, int) {
+	h := maxHeight
+	if h != 480 && h != 720 && h != 1080 {
+		h = 1080
+	}
+	w := h * 16 / 9
+	w -= w % 2
+	return w, h
+}
+
+// codieShape is the filter chain that brings an episode to the device's
+// shape at the target's size.
+func codieShape(sub string, w, h int) string {
+	shape := fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2", w, h)
+	if sub != "" {
+		shape += "," + subtitleFilter(sub)
+	}
+	return shape
+}
+
 // findFFmpegFn finds the ffmpeg binary, a var so tests can take the making
 // of a file away.
 var findFFmpegFn = findFFmpeg
@@ -262,7 +321,7 @@ func (a *app) codieStream(ctx context.Context, s *video.Stream, rate, resumeS, t
 // play, saying whether it took it.
 func (a *app) codieStartFirst(seg codieSegment, gen uint64, rate, madeToS float64) bool {
 	req := codieout.MediaSessionRequest{
-		Layout:         codieout.FullscreenLayout(),
+		Layout:         a.codieLayout(),
 		Playback:       &codieout.MediaPlayback{Volume: a.vol / 100},
 		ConflictPolicy: "replace",
 	}
@@ -317,7 +376,7 @@ func (a *app) codieMakeSegment(ctx context.Context, s *video.Stream, rate, fromS
 	}
 	dst := f.Name()
 	f.Close()
-	args := codieSegmentArgs(s, rate, fromS, spanS, subtitleFile(s), dst)
+	args := codieSegmentArgs(s, rate, fromS, spanS, subtitleFile(s), dst, a.codieMaxHeight())
 	runCtx, cancel := context.WithTimeout(ctx, codieFFmpegTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, ffmpeg, args...)
@@ -377,8 +436,9 @@ func (a *app) codieMakeSegment(ctx context.Context, s *video.Stream, rate, fromS
 }
 
 // codieSegmentArgs is ffmpeg's arguments for one segment: the window asked
-// for, in the device's shape, at the pace asked for.
-func codieSegmentArgs(s *video.Stream, rate, fromS, spanS float64, sub, dst string) []string {
+// for, in the device's shape at the resolution the viewer chose, at the pace
+// asked for.
+func codieSegmentArgs(s *video.Stream, rate, fromS, spanS float64, sub, dst string, maxHeight int) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}
 	hdr := ffmpegHeaders(s.Headers)
 	input := func(url string) {
@@ -401,10 +461,8 @@ func codieSegmentArgs(s *video.Stream, rate, fromS, spanS float64, sub, dst stri
 	if spanS > 0 {
 		args = append(args, "-t", strconv.FormatFloat(spanS, 'f', 3, 64))
 	}
-	shape := "scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2"
-	if sub != "" {
-		shape += "," + subtitleFilter(sub)
-	}
+	w, h := codieTargetSize(maxHeight)
+	shape := codieShape(sub, w, h)
 	if rate != 1 {
 		args = append(args,
 			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
@@ -493,7 +551,7 @@ func (a *app) codieShow(dst string, rate, resumeS float64, gen uint64) {
 	startMS := codieResumeStart(resumeS, rate)
 	segIdx, innerStartMS := codieSegmentForTime(segs, startMS)
 	req := codieout.MediaSessionRequest{
-		Layout:         codieout.FullscreenLayout(),
+		Layout:         a.codieLayout(),
 		Playback:       &codieout.MediaPlayback{Volume: a.vol / 100},
 		ConflictPolicy: "replace",
 	}
@@ -776,13 +834,13 @@ func (a *app) codieMakeMP4To(parent context.Context, s *video.Stream, rate float
 	if ffmpeg == "" {
 		return errors.New(i18n.T("The device needs ffmpeg to take episodes; install it with your package manager and try again"))
 	}
-	asIs := rate == 1 && probePlayableAsIs(parent, s, s.Headers)
+	asIs := rate == 1 && probePlayableAsIs(parent, s, s.Headers, a.codieMaxHeight())
 	if asIs {
 		log.Printf("codie play: streams already in device shape; copying")
 	} else {
 		log.Printf("codie play: streams need transcoding (rate %g)", rate)
 	}
-	args := codieFFmpegArgs(s, rate, asIs, dst)
+	args := codieFFmpegArgs(s, rate, asIs, dst, a.codieMaxHeight())
 	ctx, cancel := context.WithTimeout(parent, codieFFmpegTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffmpeg, args...)
@@ -848,7 +906,7 @@ readLoop:
 // picture, atempo for the sound, whose range covers the whole rate menu in
 // one go. asIs says the stream already plays as the device takes it, which
 // only ever goes with the usual speed.
-func codieFFmpegArgs(s *video.Stream, rate float64, asIs bool, dst string) []string {
+func codieFFmpegArgs(s *video.Stream, rate float64, asIs bool, dst string, maxHeight int) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}
 	hdr := ffmpegHeaders(s.Headers)
 	input := func(url string) {
@@ -867,11 +925,12 @@ func codieFFmpegArgs(s *video.Stream, rate float64, asIs bool, dst string) []str
 	} else {
 		args = append(args, "-map", "0:v:0?", "-map", "0:a:0?")
 	}
+	w, h := codieTargetSize(maxHeight)
 	switch {
 	case rate != 1:
 		args = append(args,
 			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-			"-vf", fmt.Sprintf("setpts=PTS/%g,scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2", rate),
+			"-vf", fmt.Sprintf("setpts=PTS/%g,%s", rate, codieShape("", w, h)),
 			"-c:a", "aac", "-b:a", "160k",
 			"-af", fmt.Sprintf("atempo=%g", rate))
 	case asIs:
@@ -879,7 +938,7 @@ func codieFFmpegArgs(s *video.Stream, rate float64, asIs bool, dst string) []str
 	default:
 		args = append(args,
 			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-			"-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2",
+			"-vf", codieShape("", w, h),
 			"-c:a", "aac", "-b:a", "160k")
 	}
 	return append(args, "-movflags", "+faststart", "-progress", "pipe:1", dst)
@@ -985,7 +1044,7 @@ func cleanCodiePrepared() {
 // probePlayableAsIs asks ffprobe whether the stream already plays as the
 // device takes it: H.264 with AAC, no bigger than 1080p. The stream's own
 // headers go with every ask, for the CDN turns down strangers.
-func probePlayableAsIs(parent context.Context, s *video.Stream, headers map[string]string) bool {
+func probePlayableAsIs(parent context.Context, s *video.Stream, headers map[string]string, maxHeight int) bool {
 	ffprobe := findFFprobe()
 	if ffprobe == "" {
 		return false // 不知道,就当要转
@@ -1020,7 +1079,9 @@ func probePlayableAsIs(parent context.Context, s *video.Stream, headers map[stri
 	}
 	st := v.Streams[0]
 	log.Printf("codie probe-as-is: video codec=%s %dx%d", st.CodecName, st.Width, st.Height)
-	if st.CodecName != "h264" || st.Width > 1920 || st.Height > 1080 {
+	_, h := codieTargetSize(maxHeight)
+	_, capH := codieTargetSize(0)
+	if st.CodecName != "h264" || st.Height > capH || st.Height > h {
 		return false
 	}
 	// 声音:要 AAC。画面和声音分开的源才有这一问。
@@ -1343,7 +1404,7 @@ func (a *app) codieSwitchSegment(gen uint64, segIdx int, innerStartMS int64) {
 	total = len(a.codieSegs)
 	vol = a.vol
 	req := codieout.MediaSessionRequest{
-		Layout:         codieout.FullscreenLayout(),
+		Layout:         a.codieLayout(),
 		Playback:       &codieout.MediaPlayback{Volume: vol / 100},
 		ConflictPolicy: "replace",
 	}

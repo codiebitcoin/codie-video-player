@@ -20,22 +20,22 @@ func TestCodieFFmpegArgs(t *testing.T) {
 	// The usual speed of a stream already in the device's shape is a plain
 	// copy; any other pace bakes itself in, which no copy can do.
 	s := &video.Stream{URL: "http://x/v.mp4", Type: "mp4"}
-	if got := codieFFmpegArgs(s, 1, true, "out.mp4"); !hasPair(got, "-c", "copy") {
+	if got := codieFFmpegArgs(s, 1, true, "out.mp4", 0); !hasPair(got, "-c", "copy") {
 		t.Errorf("as-is at 1× = %v, want a copy", got)
 	}
-	if got := codieFFmpegArgs(s, 1.5, false, "out.mp4"); hasPair(got, "-c", "copy") {
+	if got := codieFFmpegArgs(s, 1.5, false, "out.mp4", 0); hasPair(got, "-c", "copy") {
 		t.Errorf("1.5× = %v, a copy can't change its pace", got)
 	} else if !hasPair(got, "-vf", "setpts=PTS/1.5,scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2") {
 		t.Errorf("1.5× = %v, the picture isn't sped", got)
 	} else if !hasPair(got, "-af", "atempo=1.5") {
 		t.Errorf("1.5× = %v, the sound isn't sped", got)
 	}
-	if got := codieFFmpegArgs(s, 1, false, "out.mp4"); hasStr(got, "setpts") || hasStr(got, "atempo") {
+	if got := codieFFmpegArgs(s, 1, false, "out.mp4", 0); hasStr(got, "setpts") || hasStr(got, "atempo") {
 		t.Errorf("1× transcode = %v, nothing should be sped", got)
 	}
 	// A stream with its sound apart maps the two inputs together.
 	s2 := &video.Stream{URL: "http://x/v.m3u8", AudioURL: "http://x/a.mp3", Type: "hls"}
-	got := codieFFmpegArgs(s2, 1, false, "out.mp4")
+	got := codieFFmpegArgs(s2, 1, false, "out.mp4", 0)
 	if !hasPair(got, "-map", "0:v:0") || !hasPair(got, "-map", "1:a:0?") {
 		t.Errorf("apart streams = %v, want both inputs mapped", got)
 	}
@@ -654,5 +654,76 @@ func TestCodieSeekClampsToMadeSegments(t *testing.T) {
 	}
 	if a.codieSegAt != 0 {
 		t.Fatalf("segAt = %d, a clamped seek shouldn't have switched segments", a.codieSegAt)
+	}
+}
+
+func TestCodieTargetSize(t *testing.T) {
+	tests := []struct {
+		maxHeight int
+		w, h      int
+	}{
+		{0, 1920, 1080},   // auto: the device's own cap
+		{1080, 1920, 1080},
+		{720, 1280, 720},
+		{480, 852, 480},
+		{2160, 1920, 1080}, // never past what the device takes
+		{-5, 1920, 1080},
+	}
+	for _, tt := range tests {
+		w, h := codieTargetSize(tt.maxHeight)
+		if w != tt.w || h != tt.h {
+			t.Errorf("codieTargetSize(%d) = %dx%d, want %dx%d", tt.maxHeight, w, h, tt.w, tt.h)
+		}
+	}
+}
+
+// The resolution choice shapes the picture: 480 makes a 854x480 episode, not
+// the usual 1080p one.
+func TestCodieArgsFollowResolution(t *testing.T) {
+	s := &video.Stream{URL: "http://x/v.mp4", Type: "mp4"}
+	for _, tt := range []struct {
+		maxHeight int
+		scale     string
+	}{
+		{720, "scale=1280:720:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2"},
+		{480, "scale=852:480:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2"},
+		{0, "scale=1920:1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2"},
+	} {
+		got := codieFFmpegArgs(s, 1, false, "out.mp4", tt.maxHeight)
+		if !hasPair(got, "-vf", tt.scale) {
+			t.Errorf("maxHeight %d = %v, want -vf %s", tt.maxHeight, got, tt.scale)
+		}
+	}
+}
+
+// The fit the viewer chose goes into the session's layout, and set_layout
+// moves a running session over.
+func TestCodieLayoutFollowsFit(t *testing.T) {
+	a := &app{codie: codieout.New(&codieout.Creds{Addr: "127.0.0.1:1", Secret: "x", UserID: "u"})}
+	a.codieSession = "s1"
+	if l := a.codieLayout(); l.Fit != "contain" {
+		t.Errorf("default fit = %s, want contain", l.Fit)
+	}
+	var asked string
+	var askedLayout *codieout.MediaLayout
+	saved := codieMediaAction
+	codieMediaAction = func(c *codieout.Client, session, action string, args map[string]any) {
+		asked = action
+		askedLayout, _ = args["layout"].(*codieout.MediaLayout)
+	}
+	defer func() { codieMediaAction = saved }()
+	a.codieSetFit("cover")
+	if a.deviceFit != "cover" {
+		t.Errorf("fit after set = %s, want cover", a.deviceFit)
+	}
+	if asked != "set_layout" || askedLayout == nil || askedLayout.Fit != "cover" || askedLayout.HeightPercent != 100 {
+		t.Errorf("asked %q %+v, want set_layout with a full-screen cover", asked, askedLayout)
+	}
+	if l := a.codieLayout(); l.Fit != "cover" {
+		t.Errorf("layout after set = %s, want cover", l.Fit)
+	}
+	a.codieSetFit("sideways") // nonsense is refused
+	if a.deviceFit != "cover" {
+		t.Errorf("fit after nonsense = %s, want it kept", a.deviceFit)
 	}
 }

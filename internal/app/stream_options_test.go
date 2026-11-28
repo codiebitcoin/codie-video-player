@@ -43,10 +43,10 @@ func TestCodieArgsLeaveFileOptionsOut(t *testing.T) {
 	file := &video.Stream{URL: "/tmp/a.mp4", Type: "file"}
 	network := &video.Stream{URL: "https://cdn.example/v.m3u8", Type: "hls"}
 	for name, args := range map[string][]string{
-		"segment file":    codieSegmentArgs(file, 1, 0, 30, "", "/tmp/out.mp4"),
-		"whole file":      codieFFmpegArgs(file, 1, false, "/tmp/out.mp4"),
-		"segment network": codieSegmentArgs(network, 1, 0, 30, "", "/tmp/out.mp4"),
-		"whole network":   codieFFmpegArgs(network, 1, false, "/tmp/out.mp4"),
+		"segment file":    codieSegmentArgs(file, 1, 0, 30, "", "/tmp/out.mp4", 0),
+		"whole file":      codieFFmpegArgs(file, 1, false, "/tmp/out.mp4", 0),
+		"segment network": codieSegmentArgs(network, 1, 0, 30, "", "/tmp/out.mp4", 0),
+		"whole network":   codieFFmpegArgs(network, 1, false, "/tmp/out.mp4", 0),
 	} {
 		has := false
 		for i, a := range args {
