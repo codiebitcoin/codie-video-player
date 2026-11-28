@@ -52,30 +52,9 @@ var codieMediaAction = func(c *codieout.Client, session, action string, args map
 }
 
 // codieLayout is the rectangle the session takes on the device's screen: the
-// whole of it, with the picture either shown whole (contain) or filling it
-// with the sides cropped (cover), as the viewer's fit says.
+// whole of it, the picture shown whole. The codie screen is its own screen.
 func (a *app) codieLayout() *codieout.MediaLayout {
-	l := codieout.FullscreenLayout()
-	if a.deviceFit == "cover" {
-		l.Fit = "cover"
-	}
-	return l
-}
-
-// codieSetFit says how the picture sits in the device's screen, and moves a
-// running session over at once; the sessions after it start the same way.
-func (a *app) codieSetFit(fit string) {
-	if fit != "contain" && fit != "cover" {
-		return
-	}
-	a.deviceFit = fit
-	if a.codie != nil && a.codieSession != "" {
-		codieMediaAction(a.codie, a.codieSession, "set_layout", map[string]any{"layout": a.codieLayout()})
-	}
-	a.wakeControls()
-	if a.win != nil {
-		a.win.Invalidate()
-	}
+	return codieout.FullscreenLayout()
 }
 
 // codieMaxHeight is the resolution the viewer chose, or 0 when they left it
@@ -834,7 +813,7 @@ func (a *app) codieMakeMP4To(parent context.Context, s *video.Stream, rate float
 	if ffmpeg == "" {
 		return errors.New(i18n.T("The device needs ffmpeg to take episodes; install it with your package manager and try again"))
 	}
-	asIs := rate == 1 && probePlayableAsIs(parent, s, s.Headers, a.codieMaxHeight())
+	asIs := rate == 1 && probePlayableAsIs(parent, s, s.Headers)
 	if asIs {
 		log.Printf("codie play: streams already in device shape; copying")
 	} else {
@@ -1044,7 +1023,7 @@ func cleanCodiePrepared() {
 // probePlayableAsIs asks ffprobe whether the stream already plays as the
 // device takes it: H.264 with AAC, no bigger than 1080p. The stream's own
 // headers go with every ask, for the CDN turns down strangers.
-func probePlayableAsIs(parent context.Context, s *video.Stream, headers map[string]string, maxHeight int) bool {
+func probePlayableAsIs(parent context.Context, s *video.Stream, headers map[string]string) bool {
 	ffprobe := findFFprobe()
 	if ffprobe == "" {
 		return false // 不知道,就当要转
@@ -1079,9 +1058,9 @@ func probePlayableAsIs(parent context.Context, s *video.Stream, headers map[stri
 	}
 	st := v.Streams[0]
 	log.Printf("codie probe-as-is: video codec=%s %dx%d", st.CodecName, st.Width, st.Height)
-	_, h := codieTargetSize(maxHeight)
-	_, capH := codieTargetSize(0)
-	if st.CodecName != "h264" || st.Height > capH || st.Height > h {
+	// 能直拷就直拷:设备要的是 H.264 不超 1080p,跟观看选的分辨率无关——
+	// 一个 720p 的文件原样放,比再转一遍 480p 强。
+	if st.CodecName != "h264" || st.Width > 1920 || st.Height > 1080 {
 		return false
 	}
 	// 声音:要 AAC。画面和声音分开的源才有这一问。

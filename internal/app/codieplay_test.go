@@ -696,34 +696,12 @@ func TestCodieArgsFollowResolution(t *testing.T) {
 	}
 }
 
-// The fit the viewer chose goes into the session's layout, and set_layout
-// moves a running session over.
-func TestCodieLayoutFollowsFit(t *testing.T) {
-	a := &app{codie: codieout.New(&codieout.Creds{Addr: "127.0.0.1:1", Secret: "x", UserID: "u"})}
-	a.codieSession = "s1"
-	if l := a.codieLayout(); l.Fit != "contain" {
-		t.Errorf("default fit = %s, want contain", l.Fit)
-	}
-	var asked string
-	var askedLayout *codieout.MediaLayout
-	saved := codieMediaAction
-	codieMediaAction = func(c *codieout.Client, session, action string, args map[string]any) {
-		asked = action
-		askedLayout, _ = args["layout"].(*codieout.MediaLayout)
-	}
-	defer func() { codieMediaAction = saved }()
-	a.codieSetFit("cover")
-	if a.deviceFit != "cover" {
-		t.Errorf("fit after set = %s, want cover", a.deviceFit)
-	}
-	if asked != "set_layout" || askedLayout == nil || askedLayout.Fit != "cover" || askedLayout.HeightPercent != 100 {
-		t.Errorf("asked %q %+v, want set_layout with a full-screen cover", asked, askedLayout)
-	}
-	if l := a.codieLayout(); l.Fit != "cover" {
-		t.Errorf("layout after set = %s, want cover", l.Fit)
-	}
-	a.codieSetFit("sideways") // nonsense is refused
-	if a.deviceFit != "cover" {
-		t.Errorf("fit after nonsense = %s, want it kept", a.deviceFit)
+// The device's session is always the whole screen with the picture shown
+// whole: the codie screen is its own screen, not a window to arrange.
+func TestCodieLayoutIsFullscreen(t *testing.T) {
+	a := &app{}
+	l := a.codieLayout()
+	if l.Fit != "contain" || l.WidthPercent != 100 || l.HeightPercent != 100 {
+		t.Errorf("layout = %+v, want a full-screen contain", l)
 	}
 }

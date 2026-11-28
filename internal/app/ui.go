@@ -2106,20 +2106,6 @@ func (a *app) controlsBody(c *ui.Context, playing playing) {
 			a.toggleFullscreen()
 		}
 		if a.deviceOutput && a.codie != nil {
-			// How the picture sits in the device's screen: whole (contain) or
-			// filling it with the sides cropped (cover), switched live.
-			fill := a.deviceFit == "cover"
-			label, icon := i18n.T("Fill the Device's Screen"), iconMaximize
-			if fill {
-				label, icon = i18n.T("Show the Whole Picture"), iconRestore
-			}
-			if b := iconButton(c.Key("fit"), icon, 15, ui.RGB(255, 255, 255), label); b.Clicked() {
-				if fill {
-					a.codieSetFit("contain")
-				} else {
-					a.codieSetFit("cover")
-				}
-			}
 			// The stage card says how far the episode is; here only the
 			// loudness, which is the device's, even while the episode is still
 			// being made for it.
