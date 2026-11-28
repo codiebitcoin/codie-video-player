@@ -56,6 +56,7 @@ var jaJP = map[string]string{
 	"Following":                                       "フォロー中",
 	"Forget Device":                                   "ペアリングを解除",
 	"Forward":                                         "進む",
+	"The codie device is out of reach; check that it's on and on this network": "codie デバイスに接続できません。電源とネットワークを確認してください",
 	"Fullscreen":                                      "全画面",
 	"Install Plugin":                                  "プラグインをインストール",
 	"Language":                                        "言語",

@@ -1380,6 +1380,11 @@ func (a *app) saveSettingsSoon() {
 // videoProblem makes out what went wrong with what a source was asked, for a
 // page's error state: msg, with what the source said of it.
 func videoProblem(err error, msg string) string {
+	// A device out of reach says so, not "this episode won't play": the
+	// episode is fine, the screen it goes to isn't there.
+	if deviceUnreachable(err) {
+		return i18n.T("The codie device is out of reach; check that it's on and on this network")
+	}
 	switch {
 	case errors.Is(err, video.ErrSignIn), errors.Is(err, video.ErrSetup),
 		errors.Is(err, video.ErrUnavailable), errors.Is(err, video.ErrUnsupported):
@@ -1389,6 +1394,12 @@ func videoProblem(err error, msg string) string {
 		return msg
 	}
 	return msg + ": " + err.Error()
+}
+
+// deviceUnreachable reports whether an error is the codie device not
+// answering at all, which the client's own message names.
+func deviceUnreachable(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "连不上 codie 设备")
 }
 
 // macBlocked says whether an error is macOS standing between a plugin and

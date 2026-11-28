@@ -345,6 +345,7 @@ func (a *app) codieStartFirst(seg codieSegment, gen uint64, rate, madeToS float6
 // codieMakeSegment makes one segment of the episode: the span from fromS, in
 // the shape the device takes.
 func (a *app) codieMakeSegment(ctx context.Context, s *video.Stream, rate, fromS, spanS float64) (codieSegment, error) {
+	ensureHWAccel()
 	ffmpeg := findFFmpegFn()
 	if ffmpeg == "" {
 		return codieSegment{}, errors.New(i18n.T("The device needs ffmpeg to take episodes; install it with your package manager and try again"))
@@ -414,6 +415,12 @@ func (a *app) codieMakeSegment(ctx context.Context, s *video.Stream, rate, fromS
 	return codieSegment{path: dst, durMS: probeFileDurationMS(dst)}, nil
 }
 
+// hwaccelDecode asks ffmpeg to decode with the machine's own video hardware,
+// where it has one: an AV1 source decodes several times faster than by
+// software, and the segments keep up with the watching. It goes before the
+// input it belongs to. A var so a test can say what was asked.
+var hwaccelDecode string
+
 // codieSegmentArgs is ffmpeg's arguments for one segment: the window asked
 // for, in the device's shape at the resolution the viewer chose, at the pace
 // asked for.
@@ -421,6 +428,9 @@ func codieSegmentArgs(s *video.Stream, rate, fromS, spanS float64, sub, dst stri
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}
 	hdr := ffmpegHeaders(s.Headers)
 	input := func(url string) {
+		if hwaccelDecode != "" {
+			args = append(args, strings.Fields(hwaccelDecode)...)
+		}
 		if hdr != "" {
 			args = append(args, "-headers", hdr)
 		}
@@ -809,6 +819,7 @@ func (a *app) codieMakeMP4(parent context.Context, s *video.Stream, rate float64
 
 // codieMakeMP4To makes the episode's MP4 at dst.
 func (a *app) codieMakeMP4To(parent context.Context, s *video.Stream, rate float64, dst string) error {
+	ensureHWAccel()
 	ffmpeg := findFFmpegFn()
 	if ffmpeg == "" {
 		return errors.New(i18n.T("The device needs ffmpeg to take episodes; install it with your package manager and try again"))
@@ -889,6 +900,9 @@ func codieFFmpegArgs(s *video.Stream, rate float64, asIs bool, dst string, maxHe
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}
 	hdr := ffmpegHeaders(s.Headers)
 	input := func(url string) {
+		if hwaccelDecode != "" {
+			args = append(args, strings.Fields(hwaccelDecode)...)
+		}
 		if hdr != "" {
 			args = append(args, "-headers", hdr)
 		}

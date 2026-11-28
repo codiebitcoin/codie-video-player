@@ -56,6 +56,7 @@ var zhCN = map[string]string{
 	"Following":                                       "追剧",
 	"Forget Device":                                   "解除配对",
 	"Forward":                                         "前进",
+	"The codie device is out of reach; check that it's on and on this network": "连不上 codie 设备：请确认设备已开机并在同一网络",
 	"Fullscreen":                                      "全屏",
 	"Install Plugin":                                  "安装插件",
 	"Language":                                        "语言",
