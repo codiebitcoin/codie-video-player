@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"strings"
 	"os"
 	"path/filepath"
 	"time"
@@ -91,12 +92,15 @@ func (a *app) setActiveDevice(i int) {
 	a.deviceProbe()
 }
 
-// deviceLabel is what a device is called: its own name, or its address.
+// deviceLabel is what a device is called: codie- and the host of its
+// address. The device's own name is a serial number pages long; nobody
+// wants it on a button.
 func deviceLabel(d savedDevice) string {
-	if d.Creds.Name != "" {
-		return d.Creds.Name
+	host := d.Creds.Addr
+	if i := strings.LastIndex(host, ":"); i > 0 {
+		host = host[:i]
 	}
-	return d.Creds.Addr
+	return "codie-" + host
 }
 
 // deviceState asks every paired device how it is, one to a goroutine, and

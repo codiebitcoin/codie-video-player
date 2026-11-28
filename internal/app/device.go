@@ -195,7 +195,11 @@ func (a *app) pairingView(c *ui.Context) {
 func (a *app) pairedView(c *ui.Context) {
 	ui.Column(c).Gap(14).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, i18n.T("codie device connected")).FontSize(20).FontWeight(800).Grow(1)
+			label := i18n.T("codie device connected")
+			if a.activeDeviceIndex() >= 0 {
+				label = deviceLabel(a.devices[a.activeDeviceIndex()])
+			}
+			ui.Text(c, label).FontSize(20).FontWeight(800).Grow(1)
 			if ui.Button(c.Key("forget"), i18n.T("Forget Device")).Clicked() {
 				a.deviceForget()
 			}

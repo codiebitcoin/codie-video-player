@@ -18,7 +18,7 @@ func TestDevicesListLifecycle(t *testing.T) {
 
 	a := &app{settings: &settings{}}
 	a.devices = append(a.devices,
-		savedDevice{Creds: codieout.Creds{Addr: "10.0.0.2:8081", Secret: "a", UserID: "u", DeviceID: "dev-a", Name: "Studio codie"}},
+		savedDevice{Creds: codieout.Creds{Addr: "10.0.0.2:8081", Secret: "a", UserID: "u", DeviceID: "dev-a", Name: "Codie-b2c37c7c…and-on-and-on"}},
 		savedDevice{Creds: codieout.Creds{Addr: "10.0.0.3:8081", Secret: "b", UserID: "u", DeviceID: "dev-b"}},
 	)
 	a.devices[1].Online = true
@@ -26,11 +26,11 @@ func TestDevicesListLifecycle(t *testing.T) {
 
 	b := &app{settings: &settings{}}
 	b.loadDevices()
-	if len(b.devices) != 2 || b.devices[0].Creds.Name != "Studio codie" {
+	if len(b.devices) != 2 || b.devices[0].Creds.DeviceID != "dev-a" {
 		t.Fatalf("loaded = %+v", b.devices)
 	}
 	// deviceAdd makes the newcomer active and keeps the rest.
-	creds := &codieout.Creds{Addr: "10.0.0.9:8081", Secret: "c", UserID: "u", DeviceID: "dev-c", Name: "Pocket"}
+	creds := &codieout.Creds{Addr: "10.0.0.9:8081", Secret: "c", UserID: "u", DeviceID: "dev-c"}
 	a.deviceAdd(creds)
 	if a.activeDeviceIndex() != 2 || len(a.devices) != 3 {
 		t.Fatalf("after add: active=%d devices=%d", a.activeDeviceIndex(), len(a.devices))
@@ -48,9 +48,12 @@ func TestDevicesListLifecycle(t *testing.T) {
 	if len(a.devices) != 2 || a.codie == nil {
 		t.Fatalf("after forget: devices=%d codie=%v", len(a.devices), a.codie != nil)
 	}
-	// deviceLabel prefers the device's own name.
-	if deviceLabel(a.devices[0]) != "Studio codie" {
-		t.Errorf("label = %q", deviceLabel(a.devices[0]))
+	// The label is codie- plus the address's host: no serial numbers.
+	if got := deviceLabel(a.devices[0]); got != "codie-10.0.0.2" {
+		t.Errorf("label = %q, want codie-10.0.0.2", got)
+	}
+	if got := deviceLabel(savedDevice{Creds: codieout.Creds{Addr: "codie.local:8081"}}); got != "codie-codie.local" {
+		t.Errorf("label = %q, want codie-codie.local", got)
 	}
 	_ = os.Remove("")
 }
