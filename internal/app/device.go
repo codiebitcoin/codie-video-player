@@ -40,24 +40,38 @@ type pairState struct {
 
 // codiePath is where the paired device's credential is kept — with the rest
 // of the app's own, so a run that only exists to be looked at keeps its
-// pairing to itself too.
-func codiePath() string {
+// pairing to itself too. A var so a test can point it at a folder of its own.
+var codiePath = func() string {
 	return filepath.Join(userDataDir(""), "codie.json")
 }
 
-// loadCodie brings back the device paired before, if there was one.
+// loadCodie brings back the devices paired before: the list of them, and the
+// one that was active last. A list that has nothing yet takes what codie.json
+// holds, so an older run's pairing stays.
 func (a *app) loadCodie() {
-	b, err := os.ReadFile(codiePath())
-	if err != nil {
+	a.loadDevices()
+	if len(a.devices) == 0 {
+		b, err := os.ReadFile(codiePath())
+		if err != nil {
+			return
+		}
+		var creds codieout.Creds
+		if json.Unmarshal(b, &creds) != nil || creds.Addr == "" || creds.Secret == "" {
+			return
+		}
+		a.devices = append(a.devices, savedDevice{Creds: creds, Online: true})
+		a.saveDevices()
+	}
+	if a.activeDeviceIndex() < 0 {
+		a.setActiveDevice(0)
 		return
 	}
-	var creds codieout.Creds
-	if json.Unmarshal(b, &creds) != nil || creds.Addr == "" || creds.Secret == "" {
-		return
-	}
-	a.codie = codieout.New(&creds)
+	i := a.activeDeviceIndex()
+	a.codie = codieout.New(&a.devices[i].Creds)
 	a.syncDeviceSlot()
 	a.toolsRefresh()
+	a.devicePollStart()
+	go a.deviceStatePoll()
 }
 
 // saveCodie keeps the credential, or forgets it with the device.
@@ -176,7 +190,8 @@ func (a *app) pairingView(c *ui.Context) {
 	})
 }
 
-// pairedView is how the device is, and what it says it can do.
+// pairedView is how the device is, and what it says it can do: the devices
+// paired over time with each one's state, the active one at work.
 func (a *app) pairedView(c *ui.Context) {
 	ui.Column(c).Gap(14).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
@@ -185,6 +200,7 @@ func (a *app) pairedView(c *ui.Context) {
 				a.deviceForget()
 			}
 		})
+		a.deviceList(c)
 		if a.deviceNote != "" {
 			ui.Text(c, a.deviceNote).FontSize(13).TextColor(colors.muted)
 		}
@@ -247,6 +263,55 @@ func (a *app) pairedView(c *ui.Context) {
 							ui.Text(c, r.Note).FontSize(11.5).TextColor(colors.muted).MaxLines(6).LineHeight(1.4)
 						}
 					})
+				}
+			})
+		}
+	})
+}
+
+// deviceList is every paired device: its name or address, whether it answers
+// now, and a switch to it for all but the active one. The active one carries
+// the play; the rest sit ready.
+func (a *app) deviceList(c *ui.Context) {
+	if len(a.devices) == 0 {
+		return
+	}
+	active := a.activeDeviceIndex()
+	ui.Column(c.Key("devices")).Gap(6).Children(func() {
+		ui.Text(c, i18n.T("Paired devices")).FontSize(12).FontWeight(700).TextColor(colors.faint)
+		for i := range a.devices {
+			i, d := i, &a.devices[i]
+			row := ui.Row(c.Key("dev"+strconv.Itoa(i))).Gap(10).AlignItems(ui.Center).
+				Padding(10, 12).Radius(9)
+			if i == active {
+				row.Background(colors.accent.Alpha(0.14)).Border(1, colors.accent.Alpha(0.5))
+			} else {
+				row.Background(colors.press)
+			}
+			row.Children(func() {
+				dot := ui.Box(c.Key("dot"+strconv.Itoa(i))).Size(8, 8).Radius(4).Shrink(0)
+				if d.Online {
+					dot.Background(ui.Oklch(0.75, 0.17, 145))
+				} else {
+					dot.Background(ui.Oklch(0.7, 0.19, 25))
+				}
+				ui.Column(c).Gap(1).Grow(1).Children(func() {
+					ui.Text(c, deviceLabel(*d)).FontSize(13).FontWeight(600).SingleLine()
+					state := i18n.T("Disconnected")
+					if d.Online {
+						state = i18n.T("Online")
+					}
+					t := ui.Text(c, state).FontSize(11.5)
+					if d.Online {
+						t.TextColor(ui.Oklch(0.75, 0.17, 145))
+					} else {
+						t.TextColor(colors.faint)
+					}
+				})
+				if i == active {
+					ui.Text(c, i18n.T("In use")).FontSize(12).FontWeight(700).TextColor(colors.accent)
+				} else if b := ui.Button(c.Key("use"+strconv.Itoa(i)), i18n.T("Use")); d.Online && b.Clicked() {
+					a.deviceUse(i)
 				}
 			})
 		}
@@ -462,11 +527,9 @@ func (a *app) deviceConfirmPair() {
 				a.pair.err = err.Error()
 				return
 			}
-			a.codie = codieout.New(creds)
-			a.saveCodie(creds)
+			a.deviceAdd(creds)
 			a.pair.challenge, a.pair.code, a.pair.err = "", "", ""
-			a.toolsRefresh()
-			a.deviceProbe()
+			a.pair.addr = ""
 		})
 	}()
 }
@@ -501,11 +564,27 @@ func (a *app) deviceProbe() {
 	}()
 }
 
-// deviceForget unmates the device.
+// deviceForget unmates the active device, taking it off the list. Another
+// paired one, when there is one, becomes the active device.
 func (a *app) deviceForget() {
 	a.stopPlayer()
+	id := ""
+	if a.codie != nil {
+		id = a.codie.Creds.DeviceID
+	}
+	kept := a.devices[:0]
+	for _, d := range a.devices {
+		if d.Creds.DeviceID != id {
+			kept = append(kept, d)
+		}
+	}
+	a.devices = kept
+	a.saveDevices()
 	a.codie = nil
 	a.toolsRefresh()
 	a.saveCodie(nil)
-	a.probe, a.deviceNote = nil, ""
+	a.probe, a.mediaProbe, a.deviceNote = nil, nil, ""
+	if len(a.devices) > 0 {
+		a.setActiveDevice(0)
+	}
 }

@@ -147,16 +147,16 @@ type app struct {
 
 	// 在 codie 上播放:转好的 MP4 开成设备的媒体会话,画面落在它的屏幕上。
 	// 超出 128MiB 的长视频会拆成多段 codieSegs 顺序无缝接力,对外仍是一集。
-	deviceOutput      bool
-	codieSession      string
-	codieFile         string
-	codieSegs         []codieSegment
-	codieSegAt        int
-	codieTotalMS      int64
+	deviceOutput bool
+	codieSession string
+	codieFile    string
+	codieSegs    []codieSegment
+	codieSegAt   int
+	codieTotalMS int64
 	// codieEpisodeMS is the whole episode's length in the device file's clock,
 	// known from the probe before any but the first segment exists: the bar
 	// and the clock show the full video, not the part made so far.
-	codieEpisodeMS int64
+	codieEpisodeMS    int64
 	codieSwitchingSeg bool
 	// codieSeam says the next part is on its way to the device while this one
 	// still plays (or this one is out and the next isn't made yet): the stage
@@ -207,6 +207,18 @@ type app struct {
 	mediaProbe  []codieout.MediaSessionProbe
 	probing     bool
 	deviceNote  string
+	// devices are the codie devices paired over time, the active one among
+	// them; each carries whether it answers now.
+	devices    []savedDevice
+	devicePoll bool
+}
+
+// savedDevice is one paired codie: its credential and how it answered at the
+// last ask. The active one is what a.codie points at.
+type savedDevice struct {
+	Creds  codieout.Creds `json:"creds"`
+	Online bool           `json:"online"`
+	Err    string         `json:"err,omitempty"`
 }
 
 // pageKind is one of the window's pages.
